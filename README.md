@@ -1,3 +1,3 @@
-# aind-capsule-template
+# iGluSnFR-registration
 
-Basic structure of a capsule to be customized as needed.
+This capsule does registration for iGluSnFR data.
