@@ -2,7 +2,10 @@ import os
 import cv2
 import argparse
 import re
+import pytz
+import json
 import dateparser
+from datetime import datetime
 import numpy as np
 from ScanImageTiffReader import ScanImageTiffReader
 from scipy.fft import fft2
@@ -10,7 +13,11 @@ import numpy.ma as ma
 from scipy.interpolate import interp1d
 from scipy.interpolate import interp1d, PchipInterpolator
 from utils.stripRegistrationBergamo import stripRegistrationBergamo_init
-
+from aind_data_schema.core.data_description import Funding, RawDataDescription
+from aind_data_schema_models.modalities import Modality
+from aind_data_schema_models.organizations import Organization
+from aind_data_schema_models.pid_names import PIDName
+from aind_data_schema_models.platforms import Platform
 
 def run(params, data_dir, output_path):
     # Create output directory
@@ -42,12 +49,30 @@ def run(params, data_dir, output_path):
         path_template_list = []
         stripRegistrationBergamo_init(ds_time, initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
 
-        # path_template_list contains the paths to the files
-        for file_path in path_template_list:
-            if os.path.exists(file_path):
-                os.remove(file_path)
-            else:
-                print(f"The file {file_path} does not exist.")
+    # path_template_list contains the paths to the files
+    for file_path in path_template_list:
+        if os.path.exists(file_path):
+            os.remove(file_path)
+        else:
+            print(f"The file {file_path} does not exist.")
+
+    dt = datetime.now(pytz.timezone('America/Los_Angeles'))
+    # create data_description.json
+    d = RawDataDescription(
+        modality=[Modality.FIB],
+        platform=Platform.FIP,
+        subject_id='Test', #TODO:  Needs to be something else
+        creation_time=dt,
+        institution=Organization.AIND,
+        investigators=[PIDName(name="Caleb")],
+        funding_source=[Funding(funder=Organization.AI)],
+        data_summary=json.dumps(params),
+    )
+    d.write_standard_file(output_path)
+    
+    with open(output_path + 'simulation_parameters.json', 'w') as f:
+        json.dump(params, f)
+
 
 if __name__ == "__main__": 
     # Create argument parser

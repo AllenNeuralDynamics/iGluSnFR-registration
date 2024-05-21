@@ -1,4 +1,4 @@
-# hash:sha256:40b76a5990e19a9737a02de9e4d107568bb7b465c188e9164274fe57a32072fa
+# hash:sha256:b547e983d3b317561f9a0def4d3d39af6b418272ffd366a3e09a82e4d6355ee5
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/mambaforge3:23.1.0-4-python3.10.12-ubuntu22.04
 
@@ -13,6 +13,8 @@ RUN mamba install -y \
     && mamba clean -ya
 
 RUN pip install -U --no-cache-dir \
+    aind-data-schema==0.37.3 \
+    dateparser==1.2.0 \
     jnormcorre==1.0.0 \
     matplotlib==3.9.0 \
     opencv-python-headless==4.9.0.80 \
