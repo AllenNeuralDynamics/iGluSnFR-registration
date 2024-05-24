@@ -78,18 +78,20 @@ def run(params, data_dir, output_path):
         with h5py.File(h5_path, 'r') as file:
             gt_motionC = file['GT/motionC'][:]
             mean_gt_motionC = np.mean(gt_motionC)
+            gt_motionC -= mean_gt_motionC
             gt_motionR = file['GT/motionR'][:]
             mean_gt_motionR = np.mean(gt_motionR)
+            gt_motionR -= mean_gt_motionR
 
             # Calculate MSE for x shifts
-            mse_x_strip = np.mean((x_shifts_strip - mean_gt_motionC)**2)
-            mse_x_suite2p = np.mean((x_shifts_suite2p - mean_gt_motionC)**2)
-            mse_x_caiman = np.mean((x_shifts_caiman - mean_gt_motionC)**2)
+            mse_x_strip = np.mean((x_shifts_strip - gt_motionR)**2)
+            mse_x_suite2p = np.mean((x_shifts_suite2p - gt_motionR)**2)
+            mse_x_caiman = np.mean((x_shifts_caiman - gt_motionR)**2)
 
             # Calculate MSE for y shifts
-            mse_y_strip = np.mean((y_shifts_strip - mean_gt_motionR)**2)
-            mse_y_suite2p = np.mean((y_shifts_suite2p - mean_gt_motionR)**2)
-            mse_y_caiman = np.mean((y_shifts_caiman - mean_gt_motionR)**2)
+            mse_y_strip = np.mean((y_shifts_strip - gt_motionC)**2)
+            mse_y_suite2p = np.mean((y_shifts_suite2p - gt_motionC)**2)
+            mse_y_caiman = np.mean((y_shifts_caiman - gt_motionC)**2)
 
             print("MSE of x_shifts_strip:", mse_x_strip)
             print("MSE of x_shifts_suite2p:", mse_x_suite2p)
