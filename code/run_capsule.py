@@ -4,6 +4,7 @@ import argparse
 import re
 import pytz
 import json
+import h5py
 import dateparser
 from datetime import datetime
 import numpy as np
@@ -13,6 +14,8 @@ import numpy.ma as ma
 from scipy.interpolate import interp1d
 from scipy.interpolate import interp1d, PchipInterpolator
 from utils.stripRegistrationBergamo import stripRegistrationBergamo_init
+from utils.suite2pRegistration import suite2pRegistration
+from utils.CaImAnRegistration import CaImAnRegistration
 from aind_data_schema.core.data_description import Funding, RawDataDescription
 from aind_data_schema_models.modalities import Modality
 from aind_data_schema_models.organizations import Organization
@@ -45,9 +48,57 @@ def run(params, data_dir, output_path):
         
         initFrames = 400
         ds_time = None
+
+        # 1. Strip Bergamo Registration 
         output_path_= os.path.join(output_path, fn)
         path_template_list = []
-        stripRegistrationBergamo_init(ds_time, initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
+        x_shifts_strip, y_shifts_strip = stripRegistrationBergamo_init(ds_time, initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
+
+        # Split the filename into name and extension
+        name, ext = os.path.splitext(fn)
+
+        # 2. Suite2p Registration
+        suite2p_fn = f"{name}_suite2p{ext}"
+        output_path_suite2 = os.path.join(output_path, suite2p_fn)
+        n_time, Ly, Lx = Ad.shape[3], Ad.shape[0], Ad.shape[1]
+        x_shifts_suite2p, y_shifts_suite2p = suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path, output_path_suite2)
+
+        # 3. CaImAn Registration
+        suite2p_fn = f"{name}_caiman{ext}"
+        output_path_caiman = os.path.join(output_path, suite2p_fn)
+        x_shifts_caiman, y_shifts_caiman = CaImAnRegistration(os.path.join(data_dir, fn), output_path_caiman)
+
+        # Read ground truth 
+        # Replace the .tif extension with .h5
+        h5_fn = fn.replace('.tif', '_groundtruth.h5')
+
+        # Join the directory with the new filename
+        h5_path = os.path.join(data_dir, h5_fn)
+        print(h5_path)
+        with h5py.File(h5_path, 'r') as file:
+            gt_motionC = file['GT/motionC'][:]
+            mean_gt_motionC = np.mean(gt_motionC)
+            gt_motionR = file['GT/motionR'][:]
+            mean_gt_motionR = np.mean(gt_motionR)
+
+            # Calculate MSE for x shifts
+            mse_x_strip = np.mean((x_shifts_strip - mean_gt_motionC)**2)
+            mse_x_suite2p = np.mean((x_shifts_suite2p - mean_gt_motionC)**2)
+            mse_x_caiman = np.mean((x_shifts_caiman - mean_gt_motionC)**2)
+
+            # Calculate MSE for y shifts
+            mse_y_strip = np.mean((y_shifts_strip - mean_gt_motionR)**2)
+            mse_y_suite2p = np.mean((y_shifts_suite2p - mean_gt_motionR)**2)
+            mse_y_caiman = np.mean((y_shifts_caiman - mean_gt_motionR)**2)
+
+            print("MSE of x_shifts_strip:", mse_x_strip)
+            print("MSE of x_shifts_suite2p:", mse_x_suite2p)
+            print("MSE of x_shifts_caiman:", mse_x_caiman)
+
+            print("MSE of y_shifts_strip:", mse_y_strip)
+            print("MSE of y_shifts_suite2p:", mse_y_suite2p)
+            print("MSE of y_shifts_caiman:", mse_y_caiman)
+
 
     # path_template_list contains the paths to the files
     for file_path in path_template_list:

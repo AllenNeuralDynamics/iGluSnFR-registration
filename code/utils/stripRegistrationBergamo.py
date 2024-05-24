@@ -420,3 +420,9 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     # Save the interpolated stack as a multi-page TIFF file
     tifffile.imwrite(tif_path, interpolated_stack.astype(np.float32))
+
+    x_shifts_mean = np.mean(motionR)
+    y_shifts_mean = np.mean(motionC)
+
+    # Center the shifts to zero 
+    return motionR - x_shifts_mean, motionC - y_shifts_mean
