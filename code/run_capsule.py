@@ -4,6 +4,7 @@ import argparse
 import re
 import pytz
 import json
+import glob
 import h5py
 import dateparser
 from datetime import datetime
@@ -79,6 +80,7 @@ def run(params, data_dir, output_path):
             gt_motionC = file['GT/motionC'][:]
             mean_gt_motionC = np.mean(gt_motionC)
             gt_motionC -= mean_gt_motionC
+            
             gt_motionR = file['GT/motionR'][:]
             mean_gt_motionR = np.mean(gt_motionR)
             gt_motionR -= mean_gt_motionR
@@ -108,6 +110,20 @@ def run(params, data_dir, output_path):
             os.remove(file_path)
         else:
             print(f"The file {file_path} does not exist.")
+
+    # Remove tiffs generated from CaImAn 
+    caiman_dir_path = '/root/capsule/'
+
+    # Find all .tif files in the directory
+    caiman_tif_files = glob.glob(os.path.join(caiman_dir_path, '*.tiff'))
+
+    # Delete each file
+    if len(caiman_tif_files) == 0:
+        print("caiman tiffs don't exist")
+    else:
+        print("Deleting caiman tif files.")
+        for tif_file in caiman_tif_files:
+            os.remove(tif_file)
 
     dt = datetime.now(pytz.timezone('America/Los_Angeles'))
     # create data_description.json

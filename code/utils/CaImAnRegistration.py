@@ -32,7 +32,6 @@ def CaImAnRegistration(fname, output_path_caiman):
 
     # Perform motion correction
     mc.motion_correct(save_movie=True)
-
     m_rig = cm.load(mc.mmap_file)
 
     m_rig.save(output_path_caiman)
