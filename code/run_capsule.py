@@ -1,5 +1,6 @@
 import os
 import cv2
+import csv
 import argparse
 import re
 import pytz
@@ -26,82 +27,128 @@ from aind_data_schema_models.platforms import Platform
 def run(params, data_dir, output_path):
     # Create output directory
     if not os.path.exists(output_path):
-        print('Creating output directory...')
+        print('Creating main output directory...')
         os.makedirs(output_path)
-
+    
     print('Output directory created at', output_path)
 
-    fns = [fn for fn in os.listdir(data_dir) if fn.endswith('.tif')]
-    for fn in fns:
-        
-        A = ScanImageTiffReader(os.path.join(data_dir, fn))
-        Ad = np.array(A.data(), dtype=np.float32)
-        Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
+    # Create the registration_results.csv file if it doesn't exist
+    registration_results_file = os.path.join(output_path, 'registration_results.csv')
+    file_exists = os.path.isfile(registration_results_file)
 
-        # Permute the dimensions of the array to reorder them
-        Ad = np.transpose(Ad, (1, 3, 2, 0))
-        # Ad = np.transpose(Ad, (3, 2, 1, 0))
+    tif_files = []
+    # for root, dirs, files in os.walk(data_dir):
+    #     for file in files:
+    #         if file.endswith('.tif'):
+    #             file_path = os.path.join(root, file)
+    #             folder_number = os.path.basename(os.path.dirname(file_path))
+    #             tif_files.append((file_path, folder_number))
 
-        # Remove the specified lines from the array
-        Ad = Ad[params['removeLines']:, :, :, :]
+    count = 0
+    for root, dirs, files in os.walk(data_dir):
+        for file in files:
+            if file.endswith('.tif'):
+                file_path = os.path.join(root, file)
+                folder_number = os.path.basename(os.path.dirname(file_path))
+                tif_files.append((file_path, folder_number))
+                count += 1
+                if count == 2:
+                    break
+        if count == 2:
+            break
+    
+    with open(registration_results_file, 'a', newline='') as csvfile:
+        fieldnames = ['file_name', 'suite2p_R', 'Caiman_R', 'strip_R', 'suite2p_C', 'Caiman_C', 'strip_C']
+        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
 
-        print("Data shape after reshaping and transposing:", Ad.shape)
-        
-        initFrames = 400
-        ds_time = None
+        # Write the header row if the file is new
+        if not file_exists:
+            writer.writeheader()
 
-        # 1. Strip Bergamo Registration 
-        output_path_= os.path.join(output_path, fn)
-        path_template_list = []
-        x_shifts_strip, y_shifts_strip = stripRegistrationBergamo_init(ds_time, initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
+        for fn, folder_number in tif_files:
+            A = ScanImageTiffReader(fn)
+            Ad = np.array(A.data(), dtype=np.float32)
+            Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
 
-        # Split the filename into name and extension
-        name, ext = os.path.splitext(fn)
+            # Permute the dimensions of the array to reorder them
+            Ad = np.transpose(Ad, (1, 3, 2, 0))
+            # Ad = np.transpose(Ad, (3, 2, 1, 0))
 
-        # 2. Suite2p Registration
-        suite2p_fn = f"{name}_suite2p{ext}"
-        output_path_suite2 = os.path.join(output_path, suite2p_fn)
-        n_time, Ly, Lx = Ad.shape[3], Ad.shape[0], Ad.shape[1]
-        x_shifts_suite2p, y_shifts_suite2p = suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path, output_path_suite2)
+            # Remove the specified lines from the array
+            Ad = Ad[params['removeLines']:, :, :, :]
 
-        # 3. CaImAn Registration
-        suite2p_fn = f"{name}_caiman{ext}"
-        output_path_caiman = os.path.join(output_path, suite2p_fn)
-        x_shifts_caiman, y_shifts_caiman = CaImAnRegistration(os.path.join(data_dir, fn), output_path_caiman)
-
-        # Read ground truth 
-        # Replace the .tif extension with .h5
-        h5_fn = fn.replace('.tif', '_groundtruth.h5')
-
-        # Join the directory with the new filename
-        h5_path = os.path.join(data_dir, h5_fn)
-        print(h5_path)
-        with h5py.File(h5_path, 'r') as file:
-            gt_motionC = file['GT/motionC'][:]
-            mean_gt_motionC = np.mean(gt_motionC)
-            gt_motionC -= mean_gt_motionC
+            print("Data shape after reshaping and transposing:", Ad.shape)
             
-            gt_motionR = file['GT/motionR'][:]
-            mean_gt_motionR = np.mean(gt_motionR)
-            gt_motionR -= mean_gt_motionR
+            initFrames = 400
+            ds_time = None
 
-            # Calculate MSE for x shifts
-            mse_x_strip = np.mean((x_shifts_strip - gt_motionR)**2)
-            mse_x_suite2p = np.mean((x_shifts_suite2p - gt_motionR)**2)
-            mse_x_caiman = np.mean((x_shifts_caiman - gt_motionR)**2)
+            # Split the filename into name and extension for folder name malipulation
+            name, ext = os.path.splitext(os.path.basename(fn))
 
-            # Calculate MSE for y shifts
-            mse_y_strip = np.mean((y_shifts_strip - gt_motionC)**2)
-            mse_y_suite2p = np.mean((y_shifts_suite2p - gt_motionC)**2)
-            mse_y_caiman = np.mean((y_shifts_caiman - gt_motionC)**2)
+            # Create subfolders in the results directory
+            os.makedirs(os.path.join(output_path, folder_number), exist_ok=True)
 
-            print("MSE of x_shifts_strip:", mse_x_strip)
-            print("MSE of x_shifts_suite2p:", mse_x_suite2p)
-            print("MSE of x_shifts_caiman:", mse_x_caiman)
+            # 1. Strip Bergamo Registration 
+            strip_fn = f"{name}{ext}"
+            output_path_= os.path.join(output_path, os.path.join(folder_number, strip_fn))
+            path_template_list = []
+            x_shifts_strip, y_shifts_strip = stripRegistrationBergamo_init(ds_time, initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
 
-            print("MSE of y_shifts_strip:", mse_y_strip)
-            print("MSE of y_shifts_suite2p:", mse_y_suite2p)
-            print("MSE of y_shifts_caiman:", mse_y_caiman)
+            # 2. Suite2p Registration
+            suite2p_fn = f"{name}_suite2p{ext}"
+            output_path_suite2 = os.path.join(output_path, os.path.join(folder_number, suite2p_fn))
+            n_time, Ly, Lx = Ad.shape[3], Ad.shape[0], Ad.shape[1]
+            x_shifts_suite2p, y_shifts_suite2p = suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path, output_path_suite2)
+
+            # 3. CaImAn Registration
+            caiman_fn = f"{name}_caiman{ext}"
+            output_path_caiman = os.path.join(output_path,  os.path.join(folder_number, caiman_fn))
+            x_shifts_caiman, y_shifts_caiman = CaImAnRegistration(os.path.join(data_dir, fn), output_path_caiman)
+
+            # Read ground truth 
+            # Replace the .tif extension with .h5
+            h5_fn = fn.replace('.tif', '_groundtruth.h5')
+
+            # Join the directory with the new filename
+            h5_path = os.path.join(data_dir, h5_fn)
+            print(h5_path)
+            with h5py.File(h5_path, 'r') as file:
+                gt_motionC = file['GT/motionC'][:]
+                mean_gt_motionC = np.mean(gt_motionC)
+                gt_motionC -= mean_gt_motionC
+                
+                gt_motionR = file['GT/motionR'][:]
+                mean_gt_motionR = np.mean(gt_motionR)
+                gt_motionR -= mean_gt_motionR
+
+                # Calculate MSE for x shifts
+                mse_x_strip = np.mean((x_shifts_strip - gt_motionR)**2)
+                mse_x_suite2p = np.mean((x_shifts_suite2p - gt_motionR)**2)
+                mse_x_caiman = np.mean((x_shifts_caiman - gt_motionR)**2)
+
+                # Calculate MSE for y shifts
+                mse_y_strip = np.mean((y_shifts_strip - gt_motionC)**2)
+                mse_y_suite2p = np.mean((y_shifts_suite2p - gt_motionC)**2)
+                mse_y_caiman = np.mean((y_shifts_caiman - gt_motionC)**2)
+
+                print("MSE of x_shifts_strip:", mse_x_strip)
+                print("MSE of x_shifts_suite2p:", mse_x_suite2p)
+                print("MSE of x_shifts_caiman:", mse_x_caiman)
+
+                print("MSE of y_shifts_strip:", mse_y_strip)
+                print("MSE of y_shifts_suite2p:", mse_y_suite2p)
+                print("MSE of y_shifts_caiman:", mse_y_caiman)
+
+                # Write the MSE values to the CSV file
+                writer.writerow({
+                    'file_name': os.path.basename(fn),
+                    'suite2p_R': mse_x_suite2p,
+                    'Caiman_R': mse_x_caiman,
+                    'strip_R': mse_x_strip,
+                    'suite2p_C': mse_y_suite2p,
+                    'Caiman_C': mse_y_caiman,
+                    'strip_C': mse_y_strip
+                })
 
 
     # path_template_list contains the paths to the files
@@ -137,10 +184,10 @@ def run(params, data_dir, output_path):
         funding_source=[Funding(funder=Organization.AI)],
         data_summary=json.dumps(params),
     )
-    d.write_standard_file(output_path)
+    d.write_standard_file(os.path.join(output_path, folder_number))
     
-    with open(output_path + '/simulation_parameters.json', 'w') as f:
-        json.dump(params, f)
+    # with open(os.path.join(output_path, folder_number) + '/simulation_parameters.json', 'w') as f:
+    #     json.dump(params, f)
 
 
 if __name__ == "__main__": 
