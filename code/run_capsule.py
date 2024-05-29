@@ -139,7 +139,7 @@ def run(params, data_dir, output_path):
     )
     d.write_standard_file(output_path)
     
-    with open(output_path + 'simulation_parameters.json', 'w') as f:
+    with open(output_path + '/simulation_parameters.json', 'w') as f:
         json.dump(params, f)
 
 
