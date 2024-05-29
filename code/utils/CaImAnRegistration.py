@@ -23,7 +23,7 @@ def CaImAnRegistration(fname, output_path_caiman):
     if 'dview' in locals():
         cm.stop_server(dview=dview)
     c, dview, n_processes = cm.cluster.setup_cluster(
-        backend='multiprocessing', n_processes=None, single_thread=False)
+        backend='singleprocessing', n_processes=None, single_thread=False)
 
     # Create a motion correction object
     mc = MotionCorrect(data, dview=dview, max_shifts=max_shifts,
