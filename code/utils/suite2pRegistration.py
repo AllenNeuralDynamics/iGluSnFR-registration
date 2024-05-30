@@ -4,20 +4,20 @@ import suite2p
 import numpy as np
 from tifffile import tifffile
 
-def suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path_temp, output_path_suite2p):
-    ops = np.load("./code/utils/ops.npy", allow_pickle = True).item()
-
+def suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path_temp, folder_number,output_path_suite2p):
+    ops = np.load("../code/utils/ops.npy", allow_pickle = True).item()
+    
     db = {
       # 'h5py': [], # a single h5 file path
       # 'h5py_key': 'data',
       'look_one_level_down': False, # whether to look in ALL subfolders when searching for tiffs
-      'data_path': [data_dir], 
+      'data_path': [os.path.join(data_dir, folder_number)], 
                     # a list of folders with tiffs 
                     # (or folder of folders with tiffs if look_one_level_down is True, or subfolders is not empty)        
       # 'subfolders': [], # choose subfolders of 'data_path' to look in (optional)
     #   'fast_disk': 'C:/BIN', # string which specifies where the binary file will be stored (should be an SSD)
-      'tiff_list': [fn], # list of tiffs in folder * data_path *!
-      'save_path0': str(output_path_temp) # TODO: make sure output_path is only str
+      'tiff_list': [os.path.basename(fn)], # list of tiffs in folder * data_path *!
+      'save_path0': os.path.join(output_path_temp, folder_number) # TODO: make sure output_path is only str
     }
 
     opsEnd = suite2p.run_s2p(ops=ops, db=db)
@@ -36,7 +36,6 @@ def suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path_temp, output_p
     else:
       print(f"The directory {opsEnd['reg_file']} does not exist.")
 
-    print(f_reg.shape)
     # with tifffile.TiffWriter(output_path_suite2, bigtiff=True) as tif:
     f_reg[f_reg < 0] = 0
     f_reg = np.uint16(f_reg)

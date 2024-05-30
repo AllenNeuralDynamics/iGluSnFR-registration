@@ -35,8 +35,6 @@ def evaluate_description(desc):
         # Store in the dictionary
         parsed_data[key] = value
 
-    print(f"{key}: {value}")
-
     return parsed_data    
 
 def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
@@ -308,7 +306,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         indexing='ij'  # 'ij' for matrix indexing to match MATLAB's ndgrid
     )
 
-    print('Registering...')
+    print('Strip Registeration...')
 
     for DSframe in range(0, nDSframes):
         # readFrames = slice((DSframe) * dsFac, DSframe * dsFac)
@@ -320,8 +318,8 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         # M = np.transpose(M)
         # M = M - convolve2d(M, np.ones((4, 4))/16, mode='same')  # Highpass filter using Gaussian approximation
 
-        if DSframe % 1000 == 0:
-            print(f'{DSframe} of {nDSframes}')
+        # if DSframe % 1000 == 0:
+        #     print(f'{DSframe} of {nDSframes}')
 
         Ttmp = np.nanmean(np.dstack((T0, T00, template)), axis=2)
         

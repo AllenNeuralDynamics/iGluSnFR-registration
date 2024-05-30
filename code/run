@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
 set -ex
-pwd
-ls ../data
 
-# This is the master script for the capsule. When you click "Reproducible Run", the code in this file will execute.
 python -u run_capsule.py --input ../data/iGluSnFR-testing-Sim-Data_2/ --output ../results/test/
