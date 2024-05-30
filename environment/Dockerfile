@@ -1,4 +1,4 @@
-# hash:sha256:b547e983d3b317561f9a0def4d3d39af6b418272ffd366a3e09a82e4d6355ee5
+# hash:sha256:8e0c0a467012842bd122024cbf04a339a4526aa9e634866e962fa3f0203e95cf
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/mambaforge3:23.1.0-4-python3.10.12-ubuntu22.04
 
@@ -21,6 +21,7 @@ RUN pip install -U --no-cache-dir \
     scanimage-tiff-reader==1.4.1.4 \
     scikit-image==0.23.2 \
     scipy \
+    tenacity==8.3.0 \
     tifffile \
     -e git+https://github.com/calebshibu/suite2p.git@c88e1ba3aa2013fe379e64c7e45ae73a417eb4a7#egg=suite2p
 
