@@ -1,5 +1,6 @@
 import os
 import numpy as np
+import h5py
 import numpy.ma as ma
 from jnormcorre.motion_correction import MotionCorrect
 from ScanImageTiffReader import ScanImageTiffReader
@@ -307,6 +308,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     )
 
     print('Strip Registeration...')
+    aData = {} # Alignment data dictionary
 
     for DSframe in range(0, nDSframes):
         # readFrames = slice((DSframe) * dsFac, DSframe * dsFac)
@@ -419,8 +421,62 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Save the interpolated stack as a multi-page TIFF file
     tifffile.imwrite(tif_path, interpolated_stack.astype(np.float32))
 
+    # Save downsampled data
+    downsampled_interpolated_images = []
+    base_name, ext = os.path.splitext(tif_path)
+    downsampled_tif_path = f"{base_name}_DOWNSAMPLED-{dsFac}x{ext}"
+
+    Bsum = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
+    Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
+
+    with tifffile.TiffWriter(downsampled_tif_path, bigtiff=True) as tif:
+        for DSframe in range(nDSframes):
+            readFrames = (DSframe * dsFac) + np.arange(dsFac)
+            YY = downsampleTime(Ad[:, :, :, readFrames], ds_time)
+            for ch in range(numChannels):
+                map_x, map_y = np.meshgrid(np.arange(sz[1]), np.arange(sz[0]))
+                map_x = map_x + motionDSc[DSframe]
+                map_y = map_y + motionDSr[DSframe]
+                
+                B_ds = cv2.remap(YY[:, :, ch], map_x.astype(np.float32), map_y.astype(np.float32), interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
+                # fTIF.write(B_ds.astype(np.float32))
+
+                downsampled_interpolated_images.append(B_ds)
+                
+                # Bcount[:, :, ch] += ~np.isnan(B_ds)
+                # B_ds[np.isnan(B_ds)] = 0
+                # Bsum[:, :, ch] += B_ds.astype(np.float64)
+                
+    downsampled_interpolated_images = np.stack(downsampled_interpolated_images)
+    tifffile.imwrite(downsampled_tif_path, downsampled_interpolated_images.astype(np.float32))
+
     motionR_mean = np.mean(motionR)
     motionC_mean = np.mean(motionC)
 
+    # Save alignment data
+    aData['numChannels'] = 1
+    aData['frametime'] =  0.0023 #params['frametime'] #TODO: A flag to switch between sim and actual data and avoiding hard coding. 
+    aData['motionR'] = motionR - motionR_mean
+    aData['motionC'] = motionC - motionC_mean
+    aData['aError'] = aError
+    aData['aRankCorr'] = aRankCorr
+    aData['motionDSc'] = motionDSc
+    aData['motionDSr'] = motionDSr
+    aData['recNegErr'] = recNegErr
+
+    base_name, ext = os.path.splitext(tif_path)
+    alignmentData_h5_path = f"{base_name}_ALIGNMENTDATA.h5"
+    with h5py.File(alignmentData_h5_path, "w") as f:
+        print(f'Writing {alignmentData_h5_path} as h5...')
+        f.create_dataset("aData/numChannels", data=aData['numChannels'])
+        f.create_dataset("aData/frametime", data=aData['frametime'])
+        f.create_dataset("aData/motionR", data=aData['motionR'], compression="gzip")
+        f.create_dataset("aData/motionC", data=aData['motionC'], compression="gzip")
+        f.create_dataset("aData/aError", data=aData['aError'], compression="gzip")
+        f.create_dataset("aData/aRankCorr", data=aData['aRankCorr'], compression="gzip")
+        f.create_dataset("aData/motionDSc", data=aData['motionDSc'], compression="gzip")
+        f.create_dataset("aData/motionDSr", data=aData['motionDSr'], compression="gzip")
+        f.create_dataset("aData/recNegErr", data=aData['recNegErr'], compression="gzip")
+
     # Center the shifts to zero 
-    return motionR - motionR_mean, motionC - motionC_mean
+    return aData['motionR'], aData['motionC']

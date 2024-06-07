@@ -95,7 +95,7 @@ def run(params, data_dir, output_path):
             # print("Data shape after reshaping and transposing:", Ad.shape)
             
             initFrames = 400
-            ds_time = None
+            #ds_time = None
 
             # Split the filename into name and extension for folder name malipulation
             name, ext = os.path.splitext(os.path.basename(fn))
@@ -107,7 +107,7 @@ def run(params, data_dir, output_path):
             strip_fn = f"{name}{ext}"
             output_path_= os.path.join(output_path, os.path.join(folder_number, strip_fn))
             path_template_list = []
-            x_shifts_strip, y_shifts_strip = stripRegistrationBergamo_init(ds_time, initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
+            x_shifts_strip, y_shifts_strip = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
 
             # 2. Suite2p Registration
             suite2p_fn = f"{name}_suite2p{ext}"
@@ -219,6 +219,7 @@ if __name__ == "__main__":
     parser.add_argument('--removeLines', type=int, default=4)
     parser.add_argument('--numChannels', type=int, default=1)
     parser.add_argument('--writetiff', type=bool, default=False)
+    parser.add_argument('--ds_time', type=int, default=1)
 
     # Parse the arguments
     args = parser.parse_args()
@@ -234,5 +235,7 @@ if __name__ == "__main__":
     params['removeLines'] = args.removeLines
     params['numChannels'] = args.numChannels
     params['writetiff'] = args.writetiff
+    params['ds_time'] = args.ds_time
+    params['dsFac'] = 2 ** args.ds_time
 
     run(params, data_dir, output_path)
