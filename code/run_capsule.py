@@ -30,7 +30,7 @@ warnings.filterwarnings("ignore")
 
 
 # Define the retry decorator
-@retry(stop=stop_after_attempt(3), wait=wait_fixed(2))
+@retry(stop=stop_after_attempt(4), wait=wait_fixed(3))
 def read_tiff_file(fn):
     print('Reading:', fn)
     A = ScanImageTiffReader(fn)
@@ -57,6 +57,8 @@ def run(params, data_dir, output_path):
                 folder_number = os.path.basename(os.path.dirname(file_path))
                 tif_files.append((file_path, folder_number))
 
+    tif_files_sorted = sorted(tif_files, key=lambda x: int(x[1])) # Sort files by sim description
+
     # count = 0
     # for root, dirs, files in os.walk(data_dir):
     #     for file in files:
@@ -79,12 +81,14 @@ def run(params, data_dir, output_path):
         if not file_exists:
             writer.writeheader()
 
-        for fn, folder_number in tif_files:
+        for i, (fn, folder_number) in enumerate(tif_files_sorted, start=1):
+            print(f'Files left: {len(tif_files) - i}')
             try:
                 Ad = read_tiff_file(fn)
                 Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
             except Exception as e:
                 print(f"Failed to read {fn} after multiple attempts: {e}")
+
             # Permute the dimensions of the array to reorder them
             Ad = np.transpose(Ad, (1, 3, 2, 0))
             # Ad = np.transpose(Ad, (3, 2, 1, 0))
@@ -119,6 +123,8 @@ def run(params, data_dir, output_path):
             caiman_fn = f"{name}_caiman{ext}"
             output_path_caiman = os.path.join(output_path,  os.path.join(folder_number, caiman_fn))
             x_shifts_caiman, y_shifts_caiman = CaImAnRegistration( fn, output_path_caiman)
+            
+            del Ad # Free up memory
 
             # Read ground truth 
             # Replace the .tif extension with .h5
