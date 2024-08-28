@@ -48,7 +48,7 @@ def process_file(fn, folder_number, params, output_path, writer):
     Ad = np.transpose(Ad, (1, 3, 2, 0))
     Ad = Ad[params['removeLines']:, :, :, :]
 
-    initFrames = 400
+    initFrames = 1000
     name, ext = os.path.splitext(os.path.basename(fn))
     os.makedirs(os.path.join(output_path, folder_number), exist_ok=True)
 
