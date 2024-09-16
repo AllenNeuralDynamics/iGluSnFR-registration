@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
+ls
 set -ex
 
 # export JAX_TRACEBACK_FILTERING=off
 
-python -u run_capsule.py --input ../data/iGluSnFR-testing-Sim-Data-ReleaseSites_1/ --output ../scratch/testing/ #../results/
+# python -u run_capsule.py --input ../data/iGluSnFR-testing-Sim-Data-ReleaseSites_1/ --output ../scratch/testing/ #../results/
+
+
+python -u run_capsule.py --input ../scratch/iGluSnfr-Michael/ --output ../scratch/testing/

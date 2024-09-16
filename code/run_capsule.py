@@ -13,6 +13,7 @@ import numpy as np
 from ScanImageTiffReader import ScanImageTiffReader
 from scipy.fft import fft2
 import numpy.ma as ma
+import tifffile
 from scipy.interpolate import interp1d
 from scipy.interpolate import interp1d, PchipInterpolator
 from utils.stripRegistrationBergamo import stripRegistrationBergamo_init
@@ -32,20 +33,26 @@ warnings.filterwarnings("ignore")
 @retry(stop=stop_after_attempt(4), wait=wait_fixed(3))
 def read_tiff_file(fn):
     print('Reading:', fn)
-    A = ScanImageTiffReader(fn)
-    Ad = np.array(A.data(), dtype=np.float32)
-    return Ad
+    # A = ScanImageTiffReader(fn)
+    # Ad = np.array(A.data(), dtype=np.float32)
+    # return Ad
+    with tifffile.TiffFile(fn) as tif:
+        imageData = tif.asarray()
+        Ad = np.array(imageData, dtype=np.float32)
+        print('Shape while reading tiff---->', Ad.shape)
+        numChannels = Ad.shape[1]
+    return Ad, numChannels  
 
 def process_file(fn, folder_number, params, output_path, writer):
     try:
-        Ad = read_tiff_file(fn)
-        Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
+        Ad, params['numChannels'] = read_tiff_file(fn)
+        # Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
     except Exception as e:
         print(f"Failed to read {fn} after multiple attempts: {e}")
         return False
 
     # Permute the dimensions of the array to reorder them
-    Ad = np.transpose(Ad, (1, 3, 2, 0))
+    Ad = np.transpose(Ad, (2, 3, 1, 0))
     Ad = Ad[params['removeLines']:, :, :, :]
 
     initFrames = 1000
@@ -128,6 +135,7 @@ def process_file(fn, folder_number, params, output_path, writer):
     return True
     
 def run(params, data_dir, output_path):
+    print('data_dir--->', data_dir)
     if not os.path.exists(output_path):
         print('Creating main output directory...')
         os.makedirs(output_path)
@@ -144,6 +152,7 @@ def run(params, data_dir, output_path):
                 folder_number = os.path.basename(os.path.dirname(file_path))
                 tif_files.append((file_path, folder_number))
 
+    print('tif_files--->', tif_files)
     tif_files_sorted = sorted(tif_files, key=lambda x: int(x[1]))
 
     logging.basicConfig(level=logging.INFO)

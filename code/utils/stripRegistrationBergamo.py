@@ -6,7 +6,11 @@ from jnormcorre.motion_correction import MotionCorrect
 from ScanImageTiffReader import ScanImageTiffReader
 from scipy.fft import fft2
 import cv2
+from scipy.cluster.hierarchy import linkage
+from scipy.spatial.distance import squareform
+from scipy.stats import pearsonr
 from scipy.interpolate import interp1d, PchipInterpolator
+from scipy.cluster.hierarchy import fcluster
 from tifffile import tifffile
 
 def downsampleTime(Y, ds_time):
@@ -221,22 +225,115 @@ def dftups(inp, nor, noc, usfac, roff=0, coff=0):
     return out
 
 
-def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, alpha,numChannels, path_template_list, output_path_):
+def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, alpha, numChannels, path_template_list, output_path_):
     if ds_time is None:
         ds_time = 3  # the movie is downsampled using averaging in time by a factor of 2^ds_time
     
+    print('Ad shape---->', Ad.shape)
+
     dsFac = 2 ** ds_time
     framesToRead = initFrames * dsFac
     # Downsample the data
     Y = downsampleTime(Ad[:, :, :, :framesToRead], ds_time)
 
-    #Get size of the original data
+    # Get size of the original data
     sz = Ad.shape
 
-    # Sum along the third dimension and squeeze the array
-    Yhp = np.squeeze(np.sum(Y,2))
+    # Create a list of channels
+    selCh = list(range(numChannels))
 
-    corrector = MotionCorrect(lazy_dataset=Yhp.transpose(2, 1, 0),
+    # Sum along the third dimension and squeeze the array
+    # Yhp = np.squeeze(np.sum(Y,2))
+
+    print('Y shape---->', Y.shape)
+    Yhp = np.sum(Y[:, :, selCh, :].reshape(Y.shape[0], Y.shape[1], -1, Y.shape[3]), axis=2).squeeze()
+
+    print('Yhp shape---->', Yhp.shape)
+
+    # Reshape Yhp to 2D where each column is a frame
+    reshaped_Yhp = Yhp.reshape(-1, Yhp.shape[2])
+
+    # print('reshaped_Yhp shape---->', reshaped_Yhp.shape)
+    
+    # Calculate the correlation matrix
+    rho = np.corrcoef(reshaped_Yhp.T)
+
+    # print('rho shape---->', rho.shape)
+
+    # Compute the distance matrix
+    dist_matrix = 1 - rho
+
+    # Ensure the distance matrix is symmetric
+    dist_matrix = (dist_matrix + dist_matrix.T) / 2
+    
+    # Ensure the diagonal is zero (optional but often necessary for distance matrices)
+    np.fill_diagonal(dist_matrix, 0)
+    
+    # Check if the matrix is symmetric
+    is_symmetric = np.array_equal(dist_matrix, dist_matrix.T)
+    print(f"Is the distance matrix symmetric? {is_symmetric}")
+
+    # Perform hierarchical clustering using average linkage
+    Z = linkage(squareform(dist_matrix), method='average')
+
+    Z[:, :2] = np.ceil(Z[:, :2]).astype(int)
+
+    # Z = Z[:, :-1] # Matlab produces just 3 columns
+    # print('Z shape---->', Z.shape)
+    # print('Z---->', Z)
+    # Define the cutoff value
+    cutoff = 0.01
+
+    # Define the minimum cluster size
+    min_cluster_size = 100
+
+    # Initialize an empty list for clusters
+    clusters = []
+
+    # Define the maximum cutoff value
+    max_cutoff = 2.0
+
+    # Initialize variables
+    cutoff = 0.01
+    min_cluster_size = 100
+    clusters = []
+    max_cutoff = 2.0
+
+    while not clusters or all(len(cluster) < min_cluster_size for cluster in clusters):
+        cutoff += 0.01
+        if cutoff > max_cutoff:
+            raise ValueError(f"Could not find a cluster with at least {min_cluster_size} samples")
+        
+        # Perform clustering with the current cutoff
+        T = fcluster(Z, cutoff, criterion='distance')
+        
+        # Group indices by cluster label
+        clusters = [np.where(T == label)[0] for label in np.unique(T)]
+    
+    # print('T shape---->', T.shape)
+    # print('T---->', T)
+    # print('clusters shape---->', len(clusters))
+    # print('clusters---->', clusters)
+
+    # Initialize max_mean_corr to negative infinity
+    max_mean_corr = -np.inf
+
+    # Iterate over each cluster
+    for cluster_indices in clusters:
+        # Check if the cluster size meets the minimum requirement
+        if len(cluster_indices) >= min_cluster_size:
+            # Compute the mean correlation within the cluster
+            mean_corr = np.mean(np.mean(rho[np.ix_(cluster_indices, cluster_indices)]))
+            
+            # Update max_mean_corr and best_cluster if necessary
+            if mean_corr > max_mean_corr:
+                max_mean_corr = mean_corr
+                best_cluster = cluster_indices
+    
+    print('best_cluster---->', best_cluster)
+    print('max_mean_corr---->', max_mean_corr)
+
+    corrector = MotionCorrect(lazy_dataset=Yhp.transpose(2, 0, 1),
                             max_shifts=(maxshift, maxshift),  # Maximum allowed shifts in pixels
                             strides=(48, 48),  # Patch dimensions for piecewise rigid correction
                             overlaps=(24, 24),  # Overlap between patches
@@ -250,8 +347,9 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     #     corrected_frames[:, :, i] = corrected_frame
 
+    print('np.mean(Yhp[:, :, best_cluster], axis=2)', np.mean(Yhp[:, :, best_cluster], axis=2).shape)
     frame_corrector, output_file = corrector.motion_correct(
-        template=None, save_movie=True
+        template=np.mean(Yhp[:, :, best_cluster], axis=2), save_movie=True
     )
 
     # Get the current working directory
@@ -267,21 +365,22 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     else:
         print(f"The template {path_template} does not exist.")
 
-    template = ScanImageTiffReader(path_template) 
+    template = ScanImageTiffReader(path_template) # TODO: Replace with tifffilereader
 
     F = template.data()
-    F = np.transpose(F, (2, 1, 0))
+    print('F = template.data()-------->', F.shape)
+    F = np.transpose(F, (1, 2, 0))
     F = np.mean(F, axis=2)
 
-    # # Create a template with NaNs
+    # Create a template with NaNs
     template = np.full((2*maxshift + sz[0], 2*maxshift + sz[1]), np.nan)
 
-    # # Insert the matrix F into the template
+    # Insert the matrix F into the template
     template[maxshift:maxshift+sz[0], maxshift:maxshift+sz[1]] = F
 
     # template = np.transpose(template)
 
-    # # Copy the template to T0
+    # Copy the template to T0
     T0 = template.copy()
 
     # Create T00 as a zero matrix of the same size as template
