@@ -9,9 +9,80 @@ import cv2
 from scipy.cluster.hierarchy import linkage
 from scipy.spatial.distance import squareform
 from scipy.stats import pearsonr
+from scipy.ndimage import binary_dilation
 from scipy.interpolate import interp1d, PchipInterpolator
 from scipy.cluster.hierarchy import fcluster
+from scipy.ndimage import convolve, shift
 from tifffile import tifffile
+import matplotlib.pyplot as plt
+
+def xcorr2_nans(frame, template, shiftsCenter, dShift):
+    """
+    Perform a somewhat-efficient local normalized cross-correlation for images with NaNs.
+    
+    Parameters:
+    - frame: the frame to be aligned; this has more NaNs
+    - template: the template
+    - shiftsCenter: the center offset around which to perform a local search
+    - dShift: the maximum shift (scalar, in pixels) to consider on each axis around shiftsCenter
+    
+    Returns:
+    - motion: the calculated motion vector
+    - R: the correlation coefficient
+    """
+    SE = np.ones((2 * dShift + 1, 2 * dShift + 1), dtype=np.bool_)
+    # Create structuring element for dilation
+    # SE = generate_binary_structure(dShift, 1)
+    # SE = binary_dilation(SE, iterations=dShift)
+    
+    # Valid pixels of the new frame
+    fValid = ~np.isnan(frame) & shift(~binary_dilation(np.isnan(template), structure=SE), shiftsCenter)
+    fValid[:dShift, :] = False
+    fValid[-dShift:, :] = False
+    fValid[:, :dShift] = False
+    fValid[:, -dShift:] = False
+
+    # shiftsCenter = np.array(shiftsCenter) 
+    tValid = np.roll(fValid, shift=-np.array(shiftsCenter))
+
+    F = frame[fValid]  # fixed data
+    ssF = np.sqrt(np.sum(F**2))
+
+    # Correlation is sum(A.*B)./(sqrt(ssA)*sqrt(ssB)); ssB is constant though
+    shifts = np.arange(-dShift, dShift + 1)
+    C = np.full((len(shifts), len(shifts)), np.nan)
+    for drix in range(len(shifts)):
+        for dcix in range(len(shifts)):
+            T = template[np.roll(tValid, (-shifts[drix], shifts[dcix]), axis=(0, 1))]
+            ssT = np.sum(T**2)
+            C[drix, dcix] = np.sum(F * T) / np.sqrt(ssT)
+                
+    # Find maximum of correlation map
+    maxval = np.nanmax(C)
+    if np.isnan(maxval):
+        raise ValueError("All-NaN slice encountered in cross-correlation.")
+    
+    rr, cc = np.unravel_index(np.nanargmax(C), C.shape)
+
+    R = maxval / ssF  # correlation coefficient
+
+    if 1 < rr < len(shifts) - 1 and 1 < cc < len(shifts) - 1:
+        # Perform superresolution upsampling
+        ratioR = min(1e6, (C[rr, cc] - C[rr - 1, cc]) / (C[rr, cc] - C[rr + 1, cc]))
+        dR = (1 - ratioR) / (1 + ratioR) / 2
+
+        ratioC = min(1e6, (C[rr, cc] - C[rr, cc - 1]) / (C[rr, cc] - C[rr, cc + 1]))
+        dC = (1 - ratioC) / (1 + ratioC) / 2
+
+        motion = shiftsCenter + np.array([shifts[rr] - dR, shifts[cc] - dC])
+    else:
+        # The optimum is at an edge of search range; no superresolution
+        motion = shiftsCenter + np.array([shifts[rr], shifts[cc]])
+
+    if np.any(np.isnan(motion)):
+        raise ValueError("NaN encountered in motion calculation.")
+
+    return motion, R
 
 def downsampleTime(Y, ds_time):
     for _ in range(ds_time):
@@ -108,8 +179,8 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         nlarge = n * 2
         CC = np.zeros((mlarge, nlarge), dtype=np.complex128)
         CC[
-            m - (m // 2) : m + (m // 2) + 1,
-            n - (n // 2) : n + (n // 2) + 1,
+            m - (m // 2) : m + (m // 2),
+            n - (n // 2) : n + (n // 2),
         ] = np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
 
         # Compute crosscorrelation and locate the peak
@@ -232,7 +303,13 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     print('Ad shape---->', Ad.shape)
 
     dsFac = 2 ** ds_time
+
+    print('dsFac----->', dsFac)
+    print('ds_time----->', ds_time)
+
     framesToRead = initFrames * dsFac
+
+    print('framesToRead----->', framesToRead)
     # Downsample the data
     Y = downsampleTime(Ad[:, :, :, :framesToRead], ds_time)
 
@@ -370,7 +447,9 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     F = template.data()
     print('F = template.data()-------->', F.shape)
     F = np.transpose(F, (1, 2, 0))
+    print('F transpose-------->', F.shape)
     F = np.mean(F, axis=2)
+    print('F mean-------->', F.shape)
 
     # Create a template with NaNs
     template = np.full((2*maxshift + sz[0], 2*maxshift + sz[1]), np.nan)
@@ -399,12 +478,17 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     aRankCorr = np.nan * np.ones(nDSframes)
     recNegErr = np.nan * np.ones(nDSframes)
 
+    print('nDSframes-------->', nDSframes)
+
     # Create view matrices for interpolation
     viewR, viewC = np.meshgrid(
         np.arange(0, sz[0] + 2 * maxshift) - maxshift, #sz in matlab is 121, 45, 1, 10000
         np.arange(0, sz[1] + 2 * maxshift) - maxshift,
         indexing='ij'  # 'ij' for matrix indexing to match MATLAB's ndgrid
     )
+
+    print('maxshift------->', maxshift)
+    print('viewR-------->', viewR.shape)
 
     print('Strip Registeration...')
     aData = {} # Alignment data dictionary
@@ -414,17 +498,17 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         readFrames = list(range((DSframe) * dsFac, (DSframe) * dsFac + dsFac))
         
         M = downsampleTime(Ad[:, :, :, readFrames], ds_time)
-        M = np.squeeze(np.sum(M, axis=2))
+        M = np.sum(M[:,:,selCh,:].reshape(M.shape[0], M.shape[1], -1, M.shape[3]), axis=2).squeeze()
         # M = np.sum(M, axis=2)  # Merge frames
         # M = np.transpose(M)
         # M = M - convolve2d(M, np.ones((4, 4))/16, mode='same')  # Highpass filter using Gaussian approximation
 
-        # if DSframe % 1000 == 0:
-        #     print(f'{DSframe} of {nDSframes}')
+        if DSframe % 1000 == 0:
+            print(f'{DSframe} of {nDSframes}')
 
         Ttmp = np.nanmean(np.dstack((T0, T00, template)), axis=2)
         
-        T = Ttmp[maxshift - initR:maxshift - initR + sz[0], maxshift - initC:maxshift - initC + sz[1]]
+        T = Ttmp[maxshift-initR : maxshift-initR+sz[0], maxshift-initC : maxshift-initC+sz[1]]
         
         output,_ = dftregistration_clipped(fft2(M), fft2(T.astype(np.float32)), 4, clipShift)
         # output = phase_cross_correlation(fft2(T.astype(np.float32)), fft2(M), normalization = 'phase', overlap_ratio = 1-maxshift/min(sz[0:2]), upsample_factor = 400) # Check normization = None vs phase and check output of shifts. 
@@ -433,10 +517,26 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         motionDSc[DSframe] = initC + output[3]
         aErrorDS[DSframe] = output[0]
 
-        if abs(motionDSr[DSframe]) < maxshift and abs(motionDSc[DSframe]) < maxshift:
-            # interpolator = interp2d(np.arange(sz[1]), np.arange(sz[0]), M, kind='linear', bounds_error=False, fill_value=np.nan)
-            # A = interpolator(viewC + motionDSc[DSframe - 1], viewR + motionDSr[DSframe - 1])
+        # Check the condition
+        if np.sqrt((motionDSr[DSframe] / sz[0])**2 + (motionDSc[DSframe] / sz[1])**2) > 0.75**2:
+            # Create a meshgrid for the coordinates
+            x = np.arange(sz[1])
+            y = np.arange(sz[0])
+            mesh_x, mesh_y = np.meshgrid(x, y)
+            
+            # Use cv2.remap for interpolation
+            map_x = np.float32(viewC)
+            map_y = np.float32(viewR)
+            Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
+            
+            motion, R = xcorr2_nans(Mfull, Ttmp, np.array([initR, initC]), 50)
+            
+            # Update the motion and error arrays
+            motionDSr[DSframe] = motion[0]
+            motionDSc[DSframe] = motion[1]
+            aErrorDS[DSframe] = R
 
+        if abs(motionDSr[DSframe]) < maxshift and abs(motionDSc[DSframe]) < maxshift:
             # Create grid points
             X, Y = np.meshgrid(np.arange(0, sz[1]), np.arange(0, sz[0]))
 
@@ -444,24 +544,37 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             Xq = viewC + motionDSc[DSframe]  # Adjust index for Python's 0-based indexing
             Yq = viewR + motionDSr[DSframe]  # Adjust index for Python's 0-based indexing
 
-            # Perform interpolation using cv2.remap over scipy.interpolate.griddata            
+            # Perform interpolation using cv2.remap over scipy.interpolate.griddata
             A = cv2.remap(M, Xq.astype(np.float32), Yq.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
-        
-            sel = ~np.isnan(A)
-            selCorr = ~np.isnan(A) & ~np.isnan(template)
-            A_ma = ma.array(A, mask=~selCorr)
-            template_ma = ma.array(template, mask=~selCorr)
 
-            aRankCorr[DSframe] = ma.corrcoef(ma.array([A_ma.compressed(), template_ma.compressed()]))[0, 1]
-            recNegErr[DSframe] = ma.mean(np.power(ma.minimum(0, A_ma - template_ma), 2))
+            Asmooth = cv2.GaussianBlur(A, (0, 0), sigmaX=1)
 
-            nantmp = sel & np.isnan(template)
-            template[nantmp] = A[nantmp]
-            template[sel] = (1 - alpha) * template[sel] + alpha * A[sel]
+            selCorr = ~(np.isnan(Asmooth) | np.isnan(Ttmp))
+            aRankCorr[DSframe] = np.corrcoef(Asmooth[selCorr], Ttmp[selCorr])[0, 1]  # Use Spearman correlation
+            recNegErr[DSframe] = np.mean(np.power(np.minimum(0, Asmooth[selCorr] * np.mean(Ttmp[selCorr]) / np.mean(Asmooth[selCorr]) - Ttmp[selCorr]), 2))
+
+            templateCt = np.isnan(template).astype(int)
+            template = np.where(np.isnan(template), 0, template)
+            template = np.where(np.isnan(A), template, template * templateCt + A)
+            templateCt = templateCt + (~np.isnan(A)).astype(int)
+            template = template / templateCt
+            template[templateCt < 100] = np.nan
 
             initR = round(motionDSr[DSframe])
             initC = round(motionDSc[DSframe])
+        else:
+            motionDSr[DSframe] = initR
+            motionDSc[DSframe] = initC
 
+    print('motionDSr---------->', motionDSr.shape)
+    print('motionDSc---------->', motionDSc.shape)
+
+    fig = plt.figure()
+    plt.plot(motionDSr)
+    fig.savefig('/root/capsule/scratch/testing/motionDSr.png', dpi=400)
+    fig = plt.figure()
+    plt.plot(motionDSc)
+    fig.savefig('/root/capsule/scratch/testing/motionDSc.png', dpi=400)
     # Upsample the shifts and compute a tighter field of view
     tDS = np.multiply(np.arange(1, nDSframes+1), dsFac) - 2**(ds_time-1) + 0.5
 
@@ -487,6 +600,10 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     maxshiftC = np.max(np.abs(motionC))
     maxshiftR = np.max(np.abs(motionR))
+    print('maxshiftC---------->', maxshiftC)
+    print('maxshiftR---------->', maxshiftR)
+    
+    print('sz---------->', sz)
 
     viewR, viewC = np.meshgrid(
         np.arange(0, sz[0] + 2 * maxshiftR) - maxshiftR,
@@ -498,56 +615,95 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Initialize an empty list to store the interpolated images
     interpolated_images = []
 
-    with tifffile.TiffWriter(tif_path, bigtiff=True) as tif:
-        for frame in range(len(motionC)):
-            for ch in range(numChannels):
-                # Create grid points
-                x, y = np.meshgrid(np.arange(0, sz[1]), np.arange(0, sz[0]))
-                
-                # Calculate new grid points
-                xi = viewC + motionC[frame]
-                yi = viewR + motionR[frame]
-                
-                # Perform interpolation using cv2.rempa over scipy griddata
-                B = cv2.remap(Ad[:, :, ch, frame], xi.astype(np.float32), yi.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
-                
-                # Append the interpolated image to the list
-                interpolated_images.append(B)
-
-    # Stack the interpolated images into a 3D array
-    interpolated_stack = np.stack(interpolated_images)
-
-    # Save the interpolated stack as a multi-page TIFF file
-    tifffile.imwrite(tif_path, interpolated_stack.astype(np.float32))
-
     # Save downsampled data
     downsampled_interpolated_images = []
     base_name, ext = os.path.splitext(tif_path)
     downsampled_tif_path = f"{base_name}_DOWNSAMPLED-{dsFac}x{ext}"
 
-    Bsum = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
-    Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
+    # Bsum = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
+    # Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
 
-    with tifffile.TiffWriter(downsampled_tif_path, bigtiff=True) as tif:
-        for DSframe in range(nDSframes):
-            readFrames = (DSframe * dsFac) + np.arange(dsFac)
-            YY = downsampleTime(Ad[:, :, :, readFrames], ds_time)
-            for ch in range(numChannels):
-                map_x, map_y = np.meshgrid(np.arange(sz[1]), np.arange(sz[0]))
-                map_x = map_x + motionDSc[DSframe]
-                map_y = map_y + motionDSr[DSframe]
-                
-                B_ds = cv2.remap(YY[:, :, ch], map_x.astype(np.float32), map_y.astype(np.float32), interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
-                # fTIF.write(B_ds.astype(np.float32))
+    print('viewR---------->', viewR.shape)
 
-                downsampled_interpolated_images.append(B_ds)
-                
-                # Bcount[:, :, ch] += ~np.isnan(B_ds)
-                # B_ds[np.isnan(B_ds)] = 0
-                # Bsum[:, :, ch] += B_ds.astype(np.float64)
-                
-    downsampled_interpolated_images = np.stack(downsampled_interpolated_images)
-    tifffile.imwrite(downsampled_tif_path, downsampled_interpolated_images.astype(np.float32))
+    # Initialize tiffSave array
+    tiffSave = np.zeros((viewR.shape[1], viewR.shape[0], nDSframes * numChannels), dtype=np.float32)
+
+    print('tiffSave---------->', tiffSave.shape)
+
+    # Initialize Bcount and Bsum arrays
+    Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels), dtype=np.float32)
+    Bsum = np.zeros((viewR.shape[0], viewR.shape[1], numChannels), dtype=np.float64)
+
+    for DSframe in range(nDSframes):
+        readFrames = (DSframe * dsFac) + np.arange(dsFac)
+        YY = downsampleTime(Ad[:, :, :, readFrames], ds_time)
+        
+        for ch in range(numChannels):
+            # Perform interpolation using cv2.remap
+            map_x = (viewC + motionDSc[DSframe]).astype(np.float32)
+            map_y = (viewR + motionDSr[DSframe]).astype(np.float32)
+            B = cv2.remap(YY[:, :, ch], map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
+            
+            # Assign to tiffSave
+            tiffSave[:, :, DSframe * numChannels + ch] = B.T.astype(np.float32)
+            
+            # Update Bcount and Bsum
+            Bcount[:, :, ch] += ~np.isnan(B)
+            B[np.isnan(B)] = 0
+            Bsum[:, :, ch] += B.astype(np.float64)
+
+    # Calculate nanRows and nanCols correctly
+    nanRows = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=1) == 1
+    nanCols = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=0) == 1
+
+    print('nanRows----->', nanRows.shape)
+    print('nanCols----->', nanCols.shape)
+
+    # Apply boolean indexing to tiffSave
+    tiffSave = tiffSave[~nanRows, :, :]
+    tiffSave = tiffSave[:, ~nanCols, :]
+
+    # Transpose to match ImageJ convention (time, Y, X)
+    tiffSave = tiffSave.transpose((2, 0, 1))
+
+    # Save with correct metadata
+    tifffile.imwrite('output.tif', tiffSave.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
+           
+    # Calculate the size of the new array
+    new_size = np.array(viewR.shape)[[1, 0]] - np.array([np.sum(nanRows), np.sum(nanCols)])
+
+    # Append the third dimension size
+    new_size = np.append(new_size, len(motionC) * numChannels)
+
+    # Create the new array filled with zeros
+    tiffSave_raw = np.zeros(new_size, dtype=np.float32)
+
+    # Save registered raw Tiffs
+    for frame in range(len(motionC)):
+        for ch in range(numChannels):
+            # Create grid points
+            x, y = np.meshgrid(np.arange(0, sz[1]), np.arange(0, sz[0]))
+            
+            # Calculate new grid points
+            xi = viewC + motionC[frame]
+            yi = viewR + motionR[frame]
+            
+            # Perform interpolation using cv2.rempa over scipy griddata
+            B = cv2.remap(Ad[:, :, ch, frame], xi.astype(np.float32), yi.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
+
+            B = B[~nanRows, :]
+            B = B[:, ~nanCols]
+
+            tiffSave_raw[:, :, (DSframe-1)*numChannels+ch] = B
+            
+            # Append the interpolated image to the list
+            # interpolated_images.append(B)
+
+    # Stack the interpolated images into a 3D array
+    # interpolated_stack = np.stack(interpolated_images)
+
+    # Save the interpolated stack as a multi-page TIFF file
+    tifffile.imwrite(tif_path, tiffSave_raw.astype(np.float32))
 
     motionR_mean = np.mean(motionR)
     motionC_mean = np.mean(motionC)

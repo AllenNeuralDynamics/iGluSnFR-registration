@@ -43,7 +43,7 @@ def read_tiff_file(fn):
         numChannels = Ad.shape[1]
     return Ad, numChannels  
 
-def process_file(fn, folder_number, params, output_path, writer):
+def process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman):
     try:
         Ad, params['numChannels'] = read_tiff_file(fn)
         # Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
@@ -55,6 +55,8 @@ def process_file(fn, folder_number, params, output_path, writer):
     Ad = np.transpose(Ad, (2, 3, 1, 0))
     Ad = Ad[params['removeLines']:, :, :, :]
 
+    Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug
+
     initFrames = 1000
     name, ext = os.path.splitext(os.path.basename(fn))
     os.makedirs(os.path.join(output_path, folder_number), exist_ok=True)
@@ -65,16 +67,24 @@ def process_file(fn, folder_number, params, output_path, writer):
     path_template_list = []
     x_shifts_strip, y_shifts_strip = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
 
-    # 2. Suite2p Registration
-    suite2p_fn = f"{name}_suite2p{ext}"
-    output_path_suite2 = os.path.join(output_path, os.path.join(folder_number, suite2p_fn))
-    n_time, Ly, Lx = Ad.shape[3], Ad.shape[0], Ad.shape[1]
-    x_shifts_suite2p, y_shifts_suite2p = suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path, folder_number, output_path_suite2)
+    if use_suite2p:
+        # 2. Suite2p Registration
+        suite2p_fn = f"{name}_suite2p{ext}"
+        output_path_suite2 = os.path.join(output_path, os.path.join(folder_number, suite2p_fn))
+        n_time, Ly, Lx = Ad.shape[3], Ad.shape[0], Ad.shape[1]
+        x_shifts_suite2p, y_shifts_suite2p = suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path, folder_number, output_path_suite2)
+    else:
+        print('-------Skipping Suite2p------')
+        x_shifts_suite2p, y_shifts_suite2p = 0 , 0
 
-    # 3. CaImAn Registration
-    caiman_fn = f"{name}_caiman{ext}"
-    output_path_caiman = os.path.join(output_path, os.path.join(folder_number, caiman_fn))
-    x_shifts_caiman, y_shifts_caiman = CaImAnRegistration(fn, output_path_caiman)
+    if use_caiman:
+        # 3. CaImAn Registration
+        caiman_fn = f"{name}_caiman{ext}"
+        output_path_caiman = os.path.join(output_path, os.path.join(folder_number, caiman_fn))
+        x_shifts_caiman, y_shifts_caiman = CaImAnRegistration(fn, output_path_caiman)
+    else:
+        print('-------Skipping Suite2p------')
+        x_shifts_caiman, y_shifts_caiman = 0 , 0
 
     # Read ground truth
     h5_fn = fn.replace('.tif', '_groundtruth.h5')
@@ -134,7 +144,7 @@ def process_file(fn, folder_number, params, output_path, writer):
 
     return True
     
-def run(params, data_dir, output_path):
+def run(params, data_dir, output_path, use_suite2p, use_caiman):
     print('data_dir--->', data_dir)
     if not os.path.exists(output_path):
         print('Creating main output directory...')
@@ -167,7 +177,7 @@ def run(params, data_dir, output_path):
 
         for i, (fn, folder_number) in enumerate(tif_files_sorted, start=1):
             print(f'Files left: {len(tif_files) - i}')
-            if not process_file(fn, folder_number, params, output_path, writer):
+            if not process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman):
                 failed_files.append((fn, folder_number))
 
     # Retry processing failed files
@@ -175,7 +185,7 @@ def run(params, data_dir, output_path):
         print("Retrying failed files...")
         for fn, folder_number in failed_files:
             print(f'Retrying file: {fn}')
-            process_file(fn, folder_number, params, output_path, writer)
+            process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman)
 
 if __name__ == "__main__": 
     # Create argument parser
@@ -192,6 +202,8 @@ if __name__ == "__main__":
     parser.add_argument('--numChannels', type=int, default=1)
     parser.add_argument('--writetiff', type=bool, default=False)
     parser.add_argument('--ds_time', type=int, default=3)
+    parser.add_argument('--suite2p', type=bool, default=False)
+    parser.add_argument('--caiman', type=bool, default=False)
 
     # Parse the arguments
     args = parser.parse_args()
@@ -210,4 +222,4 @@ if __name__ == "__main__":
     params['ds_time'] = args.ds_time
     params['dsFac'] = 2 ** args.ds_time
 
-    run(params, data_dir, output_path)
+    run(params, data_dir, output_path, args.suite2p, args.caiman)
