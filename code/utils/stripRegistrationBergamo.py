@@ -569,12 +569,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     print('motionDSr---------->', motionDSr.shape)
     print('motionDSc---------->', motionDSc.shape)
 
-    fig = plt.figure()
-    plt.plot(motionDSr)
-    fig.savefig('/root/capsule/scratch/testing/motionDSr.png', dpi=400)
-    fig = plt.figure()
-    plt.plot(motionDSc)
-    fig.savefig('/root/capsule/scratch/testing/motionDSc.png', dpi=400)
     # Upsample the shifts and compute a tighter field of view
     tDS = np.multiply(np.arange(1, nDSframes+1), dsFac) - 2**(ds_time-1) + 0.5
 
@@ -666,9 +660,11 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Transpose to match ImageJ convention (time, Y, X)
     tiffSave = tiffSave.transpose((2, 0, 1))
 
-    # Save with correct metadata
-    tifffile.imwrite('output.tif', tiffSave.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
-           
+    # Save tiff
+    tifffile.imwrite(downsampled_tif_path, tiffSave.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
+
+    raw_tif_path = f"{base_name}_REGISTERED_RAW{ext}"
+
     # Calculate the size of the new array
     new_size = np.array(viewR.shape)[[1, 0]] - np.array([np.sum(nanRows), np.sum(nanCols)])
 
@@ -691,19 +687,20 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             # Perform interpolation using cv2.rempa over scipy griddata
             B = cv2.remap(Ad[:, :, ch, frame], xi.astype(np.float32), yi.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
 
-            B = B[~nanRows, :]
-            B = B[:, ~nanCols]
+            B = B[~nanCols, :]
+            B = B[:, ~nanRows]
 
-            tiffSave_raw[:, :, (DSframe-1)*numChannels+ch] = B
+            tiffSave_raw[:, :, (frame-1)*numChannels+ch] = B.T.astype(np.float32)
             
             # Append the interpolated image to the list
             # interpolated_images.append(B)
 
-    # Stack the interpolated images into a 3D array
-    # interpolated_stack = np.stack(interpolated_images)
+    # Transpose to match ImageJ convention (time, Y, X)
+    tiffSave_raw = tiffSave_raw.transpose((2, 0, 1))
 
-    # Save the interpolated stack as a multi-page TIFF file
-    tifffile.imwrite(tif_path, tiffSave_raw.astype(np.float32))
+    # Save with correct metadata
+    tifffile.imwrite(raw_tif_path, tiffSave_raw.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
+     
 
     motionR_mean = np.mean(motionR)
     motionC_mean = np.mean(motionC)

@@ -55,7 +55,7 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
     Ad = np.transpose(Ad, (2, 3, 1, 0))
     Ad = Ad[params['removeLines']:, :, :, :]
 
-    Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug
+    # Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug
 
     initFrames = 1000
     name, ext = os.path.splitext(os.path.basename(fn))
