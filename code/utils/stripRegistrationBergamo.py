@@ -1,4 +1,5 @@
 import os
+import time
 import numpy as np
 import h5py
 import numpy.ma as ma
@@ -30,38 +31,59 @@ def xcorr2_nans(frame, template, shiftsCenter, dShift):
     - motion: the calculated motion vector
     - R: the correlation coefficient
     """
-    SE = np.ones((2 * dShift + 1, 2 * dShift + 1), dtype=np.bool_)
-    # Create structuring element for dilation
-    # SE = generate_binary_structure(dShift, 1)
-    # SE = binary_dilation(SE, iterations=dShift)
-    
-    # Valid pixels of the new frame
-    fValid = ~np.isnan(frame) & shift(~binary_dilation(np.isnan(template), structure=SE), shiftsCenter)
+    # Create a kernel for dilation using OpenCV
+    kernel_size = (2 * dShift + 1, 2 * dShift + 1)
+    SE = np.ones(kernel_size, dtype=np.uint8)
+
+    # Measure the time for the dilation operation
+    start_dilation = time.time()
+
+    # Use cv2.dilate to handle dilation operation
+    template_nan_mask = np.isnan(template).astype(np.uint8)
+    dilated_template_nan_mask = cv2.dilate(template_nan_mask, SE)
+
+    # Shift the dilated mask and create valid mask for frame
+    fValid = ~np.isnan(frame) & shift(~dilated_template_nan_mask.astype(bool), shiftsCenter)
+    end_dilation = time.time()
+    dilation_time = end_dilation - start_dilation
+    print(f"Dilation took {dilation_time:.6f} seconds")
+
     fValid[:dShift, :] = False
     fValid[-dShift:, :] = False
     fValid[:, :dShift] = False
     fValid[:, -dShift:] = False
 
-    # shiftsCenter = np.array(shiftsCenter) 
-    tValid = np.roll(fValid, shift=-np.array(shiftsCenter))
+    # Get the dimensions of the image
+    rows, cols = fValid.shape[:2]
 
-    F = frame[fValid]  # fixed data
+    # Create the transformation matrix for shifting
+    M = np.float32([[1, 0, shiftsCenter[0]], [0, 1, shiftsCenter[1]]])
+
+    # Apply warpAffine with the translation matrix
+    tValid = cv2.warpAffine(fValid.astype(np.uint8), M, (cols, rows)).astype(bool)
+
+    F = frame[fValid] # fixed data
     ssF = np.sqrt(np.sum(F**2))
 
-    # Correlation is sum(A.*B)./(sqrt(ssA)*sqrt(ssB)); ssB is constant though
     shifts = np.arange(-dShift, dShift + 1)
     C = np.full((len(shifts), len(shifts)), np.nan)
-    for drix in range(len(shifts)):
-        for dcix in range(len(shifts)):
-            T = template[np.roll(tValid, (-shifts[drix], shifts[dcix]), axis=(0, 1))]
-            ssT = np.sum(T**2)
-            C[drix, dcix] = np.sum(F * T) / np.sqrt(ssT)
-                
-    # Find maximum of correlation map
+
+    # Measure time for the for loop
+    start_loop = time.time()
+
+    for drix, dcix in np.ndindex(len(shifts), len(shifts)):
+        T = template[np.roll(tValid, (-shifts[drix], -shifts[dcix]), axis=(0, 1))]
+        ssT = np.sum(T**2)
+        C[drix, dcix] = np.sum(F * T) / np.sqrt(ssT)
+        
+    end_loop = time.time()
+    loop_time = end_loop - start_loop
+    print(f"For loop took {loop_time:.6f} seconds")
     maxval = np.nanmax(C)
+
     if np.isnan(maxval):
         raise ValueError("All-NaN slice encountered in cross-correlation.")
-    
+
     rr, cc = np.unravel_index(np.nanargmax(C), C.shape)
 
     R = maxval / ssF  # correlation coefficient
@@ -76,7 +98,7 @@ def xcorr2_nans(frame, template, shiftsCenter, dShift):
 
         motion = shiftsCenter + np.array([shifts[rr] - dR, shifts[cc] - dC])
     else:
-        # The optimum is at an edge of search range; no superresolution
+         # The optimum is at an edge of search range; no superresolution
         motion = shiftsCenter + np.array([shifts[rr], shifts[cc]])
 
     if np.any(np.isnan(motion)):
@@ -494,77 +516,101 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     aData = {} # Alignment data dictionary
 
     for DSframe in range(0, nDSframes):
-        # readFrames = slice((DSframe) * dsFac, DSframe * dsFac)
+        start_total = time.time()  # Start timing for the entire loop
+
+        # Timing for reading frames
+        start_read_frames = time.time()
         readFrames = list(range((DSframe) * dsFac, (DSframe) * dsFac + dsFac))
-        
+        end_read_frames = time.time()
+        print(f"Time for reading frames: {end_read_frames - start_read_frames:.4f} seconds")
+
+        # Timing for downsampling and reshaping
+        start_downsample = time.time()
         M = downsampleTime(Ad[:, :, :, readFrames], ds_time)
         M = np.sum(M[:,:,selCh,:].reshape(M.shape[0], M.shape[1], -1, M.shape[3]), axis=2).squeeze()
-        # M = np.sum(M, axis=2)  # Merge frames
-        # M = np.transpose(M)
-        # M = M - convolve2d(M, np.ones((4, 4))/16, mode='same')  # Highpass filter using Gaussian approximation
+        end_downsample = time.time()
+        print(f"Time for downsampling and reshaping: {end_downsample - start_downsample:.4f} seconds")
 
         if DSframe % 1000 == 0:
             print(f'{DSframe} of {nDSframes}')
 
+        # Timing for template averaging
+        start_template_avg = time.time()
         Ttmp = np.nanmean(np.dstack((T0, T00, template)), axis=2)
-        
         T = Ttmp[maxshift-initR : maxshift-initR+sz[0], maxshift-initC : maxshift-initC+sz[1]]
-        
-        output,_ = dftregistration_clipped(fft2(M), fft2(T.astype(np.float32)), 4, clipShift)
-        # output = phase_cross_correlation(fft2(T.astype(np.float32)), fft2(M), normalization = 'phase', overlap_ratio = 1-maxshift/min(sz[0:2]), upsample_factor = 400) # Check normization = None vs phase and check output of shifts. 
+        end_template_avg = time.time()
+        print(f"Time for template averaging: {end_template_avg - start_template_avg:.4f} seconds")
+
+        # Timing for registration
+        start_registration = time.time()
+        output, _ = dftregistration_clipped(fft2(M), fft2(T.astype(np.float32)), 4, clipShift)
+        end_registration = time.time()
+        print(f"Time for registration: {end_registration - start_registration:.4f} seconds")
 
         motionDSr[DSframe] = initR + output[2]
         motionDSc[DSframe] = initC + output[3]
         aErrorDS[DSframe] = output[0]
 
-        # Check the condition
+        # Timing for condition check and correction
         if np.sqrt((motionDSr[DSframe] / sz[0])**2 + (motionDSc[DSframe] / sz[1])**2) > 0.75**2:
-            # Create a meshgrid for the coordinates
+            start_correction = time.time()
             x = np.arange(sz[1])
             y = np.arange(sz[0])
             mesh_x, mesh_y = np.meshgrid(x, y)
             
-            # Use cv2.remap for interpolation
+            start_cv2_remap = time.time()
             map_x = np.float32(viewC)
             map_y = np.float32(viewR)
             Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
-            
+            end_cv2_remap = time.time()
+            print(f"Time for cv2_remap: {end_cv2_remap - start_cv2_remap:.4f} seconds")
+
+            start_xcorr2_nans = time.time()
             motion, R = xcorr2_nans(Mfull, Ttmp, np.array([initR, initC]), 50)
-            
-            # Update the motion and error arrays
+            end_xcorr2_nans = time.time()
+            print(f"Time for xcorr2_nans: {end_xcorr2_nans - start_xcorr2_nans:.4f} seconds")
+
             motionDSr[DSframe] = motion[0]
             motionDSc[DSframe] = motion[1]
             aErrorDS[DSframe] = R
+            end_correction = time.time()
+            print(f"Time for correction: {end_correction - start_correction:.4f} seconds")
 
+        # Timing for interpolation and smoothing
         if abs(motionDSr[DSframe]) < maxshift and abs(motionDSc[DSframe]) < maxshift:
-            # Create grid points
+            start_interpolation_smoothing = time.time()
             X, Y = np.meshgrid(np.arange(0, sz[1]), np.arange(0, sz[0]))
-
-            # Calculate new grid points
-            Xq = viewC + motionDSc[DSframe]  # Adjust index for Python's 0-based indexing
-            Yq = viewR + motionDSr[DSframe]  # Adjust index for Python's 0-based indexing
-
-            # Perform interpolation using cv2.remap over scipy.interpolate.griddata
+            
+            Xq = viewC + motionDSc[DSframe]
+            Yq = viewR + motionDSr[DSframe]
+            
             A = cv2.remap(M, Xq.astype(np.float32), Yq.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
-
+            
             Asmooth = cv2.GaussianBlur(A, (0, 0), sigmaX=1)
-
+            
             selCorr = ~(np.isnan(Asmooth) | np.isnan(Ttmp))
-            aRankCorr[DSframe] = np.corrcoef(Asmooth[selCorr], Ttmp[selCorr])[0, 1]  # Use Spearman correlation
+            aRankCorr[DSframe] = np.corrcoef(Asmooth[selCorr], Ttmp[selCorr])[0, 1]
             recNegErr[DSframe] = np.mean(np.power(np.minimum(0, Asmooth[selCorr] * np.mean(Ttmp[selCorr]) / np.mean(Asmooth[selCorr]) - Ttmp[selCorr]), 2))
-
+            
             templateCt = np.isnan(template).astype(int)
             template = np.where(np.isnan(template), 0, template)
             template = np.where(np.isnan(A), template, template * templateCt + A)
-            templateCt = templateCt + (~np.isnan(A)).astype(int)
-            template = template / templateCt
+            templateCt += (~np.isnan(A)).astype(int)
+            template /= templateCt
             template[templateCt < 100] = np.nan
-
+            
             initR = round(motionDSr[DSframe])
             initC = round(motionDSc[DSframe])
+            
+            end_interpolation_smoothing = time.time()
+            print(f"Time for interpolation and smoothing: {end_interpolation_smoothing - start_interpolation_smoothing:.4f} seconds")
+        
         else:
             motionDSr[DSframe] = initR
             motionDSc[DSframe] = initC
+
+        end_total = time.time()  # End timing for the entire loop
+        print(f"Total time for DSframe {DSframe}: {end_total - start_total:.4f} seconds\n")
 
     print('motionDSr---------->', motionDSr.shape)
     print('motionDSc---------->', motionDSc.shape)
