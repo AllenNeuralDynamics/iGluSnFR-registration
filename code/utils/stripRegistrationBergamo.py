@@ -709,6 +709,25 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Save tiff
     tifffile.imwrite(downsampled_tif_path, tiffSave.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
 
+    # Remove from tiffSave memory
+    del tiffSave
+
+    # Save an average image for each channel
+    for ch in range(1, numChannels+1):
+        Bmean = Bsum[:,:,ch-1] / Bcount[:,:,ch-1]
+        minV = np.percentile(Bmean[~np.isnan(Bmean)], 10)
+        maxV = np.percentile(Bmean[~np.isnan(Bmean)], 99.9)
+        Bmean = (255 * np.sqrt(np.maximum(0, (Bmean - minV) / (maxV - minV)))).astype(np.uint8)
+        # Convert nanRows and nanCols to integer arrays
+        nanRows_mean_ch = np.array(nanRows, dtype=int)
+        nanCols_mean_ch = np.array(nanCols, dtype=int)
+        
+        # Delete rows and columns
+        Bmean = np.delete(Bmean, nanRows_mean_ch, axis=0)
+        Bmean = np.delete(Bmean, nanCols_mean_ch, axis=1)
+        channel_mean_path = f"{base_name}_REGISTERED_AVG_CH{ch}_8bit.tif"
+        tifffile.imwrite(channel_mean_path, Bmean.astype(np.float32))
+
     raw_tif_path = f"{base_name}_REGISTERED_RAW{ext}"
 
     # Calculate the size of the new array
@@ -746,7 +765,9 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     # Save with correct metadata
     tifffile.imwrite(raw_tif_path, tiffSave_raw.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
-     
+
+    # Remove from tiffSave memory
+    del tiffSave_raw
 
     motionR_mean = np.mean(motionR)
     motionC_mean = np.mean(motionC)
@@ -777,4 +798,4 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         f.create_dataset("aData/recNegErr", data=aData['recNegErr'], compression="gzip")
 
     # Center the shifts to zero 
-    return aData['motionR'], aData['motionC']
+    return aData['motionR'], aData['motionC'], path_template_list

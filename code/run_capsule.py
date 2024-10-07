@@ -43,7 +43,7 @@ def read_tiff_file(fn):
         numChannels = Ad.shape[1]
     return Ad, numChannels  
 
-def process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman):
+def process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse):
     try:
         Ad, params['numChannels'] = read_tiff_file(fn)
         # Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
@@ -65,7 +65,7 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
     strip_fn = f"{name}{ext}"
     output_path_ = os.path.join(output_path, os.path.join(folder_number, strip_fn))
     path_template_list = []
-    x_shifts_strip, y_shifts_strip = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
+    x_shifts_strip, y_shifts_strip, path_template_list = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
 
     if use_suite2p:
         # 2. Suite2p Registration
@@ -86,48 +86,53 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
         print('-------Skipping Suite2p------')
         x_shifts_caiman, y_shifts_caiman = 0 , 0
 
-    # Read ground truth
-    h5_fn = fn.replace('.tif', '_groundtruth.h5')
-    h5_path = h5_fn
-    with h5py.File(h5_path, 'r') as file:
-        gt_motionC = file['GT/motionC'][:]
-        mean_gt_motionC = np.mean(gt_motionC)
-        gt_motionC -= mean_gt_motionC
-        gt_motionR = file['GT/motionR'][:]
-        mean_gt_motionR = np.mean(gt_motionR)
-        gt_motionR -= mean_gt_motionR
+    # Check if compute_mse is not None before proceeding
+    if compute_mse:
+        # Read ground truth
+        h5_fn = fn.replace('.tif', '_groundtruth.h5')
+        h5_path = h5_fn
+        with h5py.File(h5_path, 'r') as file:
+            gt_motionC = file['GT/motionC'][:]
+            mean_gt_motionC = np.mean(gt_motionC)
+            gt_motionC -= mean_gt_motionC
 
-    # Calculate MSE for x shifts
-    mse_x_strip = np.mean((x_shifts_strip - gt_motionR)**2)
-    mse_x_suite2p = np.mean((x_shifts_suite2p - gt_motionR)**2)
-    mse_x_caiman = np.mean((x_shifts_caiman - gt_motionR)**2)
+            gt_motionR = file['GT/motionR'][:]
+            mean_gt_motionR = np.mean(gt_motionR)
+            gt_motionR -= mean_gt_motionR
 
-    # Calculate MSE for y shifts
-    mse_y_strip = np.mean((y_shifts_strip - gt_motionC)**2)
-    mse_y_suite2p = np.mean((y_shifts_suite2p - gt_motionC)**2)
-    mse_y_caiman = np.mean((y_shifts_caiman - gt_motionC)**2)
+        # Calculate MSE for x shifts
+        mse_x_strip = np.mean((x_shifts_strip - gt_motionR)**2)
+        mse_x_suite2p = np.mean((x_shifts_suite2p - gt_motionR)**2)
+        mse_x_caiman = np.mean((x_shifts_caiman - gt_motionR)**2)
 
-    print("MSE of x_shifts_strip:", mse_x_strip)
-    print("MSE of x_shifts_suite2p:", mse_x_suite2p)
-    print("MSE of x_shifts_caiman:", mse_x_caiman)
-    print("MSE of y_shifts_strip:", mse_y_strip)
-    print("MSE of y_shifts_suite2p:", mse_y_suite2p)    
-    print("MSE of y_shifts_caiman:", mse_y_caiman)
+        # Calculate MSE for y shifts
+        mse_y_strip = np.mean((y_shifts_strip - gt_motionC)**2)
+        mse_y_suite2p = np.mean((y_shifts_suite2p - gt_motionC)**2)
+        mse_y_caiman = np.mean((y_shifts_caiman - gt_motionC)**2)
 
-    # Write the MSE values to the CSV file
-    writer.writerow({
-        'file_name': os.path.basename(fn),
-        'suite2p_R': mse_x_suite2p,
-        'Caiman_R': mse_x_caiman,
-        'strip_R': mse_x_strip,
-        'suite2p_C': mse_y_suite2p,
-        'Caiman_C': mse_y_caiman,
-        'strip_C': mse_y_strip
-    })
+        print("MSE of x_shifts_strip:", mse_x_strip)
+        print("MSE of x_shifts_suite2p:", mse_x_suite2p)
+        print("MSE of x_shifts_caiman:", mse_x_caiman)
+        
+        print("MSE of y_shifts_strip:", mse_y_strip)
+        print("MSE of y_shifts_suite2p:", mse_y_suite2p)
+        print("MSE of y_shifts_caiman:", mse_y_caiman)
+
+        # Write the MSE values to the CSV file
+        writer.writerow({
+            'file_name': os.path.basename(fn),
+            'suite2p_R': mse_x_suite2p,
+            'Caiman_R': mse_x_caiman,
+            'strip_R': mse_x_strip,
+            'suite2p_C': mse_y_suite2p,
+            'Caiman_C': mse_y_caiman,
+            'strip_C': mse_y_strip
+        })
 
     # Clean up temporary files
     for file_path in path_template_list:
         if os.path.exists(file_path):
+            print("Deleting jnormcorre tif files.")
             os.remove(file_path)
         else:
             print(f"The file {file_path} does not exist.")
@@ -144,7 +149,7 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
 
     return True
     
-def run(params, data_dir, output_path, use_suite2p, use_caiman):
+def run(params, data_dir, output_path, use_suite2p, use_caiman, compute_mse):
     print('data_dir--->', data_dir)
     if not os.path.exists(output_path):
         print('Creating main output directory...')
@@ -168,7 +173,7 @@ def run(params, data_dir, output_path, use_suite2p, use_caiman):
     logging.basicConfig(level=logging.INFO)
 
     failed_files = []
-
+    
     with open(registration_results_file, 'a', newline='') as csvfile:
         fieldnames = ['file_name', 'suite2p_R', 'Caiman_R', 'strip_R', 'suite2p_C', 'Caiman_C', 'strip_C']
         writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
@@ -177,7 +182,7 @@ def run(params, data_dir, output_path, use_suite2p, use_caiman):
 
         for i, (fn, folder_number) in enumerate(tif_files_sorted, start=1):
             print(f'Files left: {len(tif_files) - i}')
-            if not process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman):
+            if not process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse):
                 failed_files.append((fn, folder_number))
 
     # Retry processing failed files
@@ -185,7 +190,7 @@ def run(params, data_dir, output_path, use_suite2p, use_caiman):
         print("Retrying failed files...")
         for fn, folder_number in failed_files:
             print(f'Retrying file: {fn}')
-            process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman)
+            process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse)
 
 if __name__ == "__main__": 
     # Create argument parser
@@ -204,6 +209,7 @@ if __name__ == "__main__":
     parser.add_argument('--ds_time', type=int, default=3)
     parser.add_argument('--suite2p', type=bool, default=False)
     parser.add_argument('--caiman', type=bool, default=False)
+    parser.add_argument('--compute_mse', type=bool, default=False)
 
     # Parse the arguments
     args = parser.parse_args()
@@ -220,6 +226,5 @@ if __name__ == "__main__":
     params['numChannels'] = args.numChannels
     params['writetiff'] = args.writetiff
     params['ds_time'] = args.ds_time
-    params['dsFac'] = 2 ** args.ds_time
 
-    run(params, data_dir, output_path, args.suite2p, args.caiman)
+    run(params, data_dir, output_path, args.suite2p, args.caiman, args.compute_mse)
