@@ -29,6 +29,7 @@ from tenacity import retry, stop_after_attempt, wait_fixed
 import warnings
 warnings.filterwarnings("ignore")
 
+
 # Define the retry decorator
 @retry(stop=stop_after_attempt(4), wait=wait_fixed(3))
 def read_tiff_file(fn):
@@ -55,7 +56,7 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
     Ad = np.transpose(Ad, (2, 3, 1, 0))
     Ad = Ad[params['removeLines']:, :, :, :]
 
-    # Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug
+    Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug
 
     initFrames = 1000
     name, ext = os.path.splitext(os.path.basename(fn))

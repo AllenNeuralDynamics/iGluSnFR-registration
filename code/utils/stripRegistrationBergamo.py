@@ -16,6 +16,18 @@ from scipy.cluster.hierarchy import fcluster
 from scipy.ndimage import convolve, shift
 from tifffile import tifffile
 import matplotlib.pyplot as plt
+from numba import jit, int64, float32, prange
+
+@jit(float32[:,:](float32[:], float32[:], int64[:], int64[:], int64), nopython=False, error_model="numpy", parallel=True)
+def optimized_calculate_correlation(F, templ, tValidInd, shifts, cols):
+    n = shifts.shape[0]
+    C = np.empty((n,n), dtype=np.float32)
+    for drix in prange(n):
+        for dcix in range(n):
+            T = templ[tValidInd - shifts[drix] * cols - shifts[dcix]]
+            ssT = T.dot(T)
+            C[drix, dcix] = np.ascontiguousarray(F).dot(T) / np.sqrt(ssT)
+    return C
 
 def xcorr2_nans(frame, template, shiftsCenter, dShift):
     """
@@ -71,11 +83,18 @@ def xcorr2_nans(frame, template, shiftsCenter, dShift):
     # Measure time for the for loop
     start_loop = time.time()
 
-    for drix, dcix in np.ndindex(len(shifts), len(shifts)):
-        T = template[np.roll(tValid, (-shifts[drix], -shifts[dcix]), axis=(0, 1))]
-        ssT = np.sum(T**2)
-        C[drix, dcix] = np.sum(F * T) / np.sqrt(ssT)
-        
+    #generate drix, dcix in advance. Try to do the translation 
+    # for drix, dcix in np.ndindex(len(shifts), len(shifts)):
+    #     T = template[np.roll(tValid, (-shifts[drix], -shifts[dcix]), axis=(0, 1))]
+    #     ssT = np.sum(T**2)
+    #     C[drix, dcix] = np.sum(F * T) / np.sqrt(ssT)
+
+    tV0, tV1 = np.where(tValid)
+    tValidInd = tV0 * cols + tV1
+    shifts = np.arange(-dShift, dShift + 1)
+
+    C = optimized_calculate_correlation(F.ravel(), template.ravel().astype(np.float32), tValidInd, shifts, cols)
+
     end_loop = time.time()
     loop_time = end_loop - start_loop
     print(f"For loop took {loop_time:.6f} seconds")
@@ -704,13 +723,15 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     tiffSave = tiffSave[:, ~nanCols, :]
 
     # Transpose to match ImageJ convention (time, Y, X)
-    tiffSave = tiffSave.transpose((2, 0, 1))
+    tiffSave = tiffSave.transpose((2, 1, 0))
 
     # Save tiff
-    tifffile.imwrite(downsampled_tif_path, tiffSave.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
+    tifffile.imwrite(downsampled_tif_path, tiffSave, imagej=True, metadata={'axes': 'ZYX'})
 
     # Remove from tiffSave memory
     del tiffSave
+    del Yhp
+    del Y
 
     # Save an average image for each channel
     for ch in range(1, numChannels+1):
@@ -759,12 +780,14 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             
             # Append the interpolated image to the list
             # interpolated_images.append(B)
-
+    
+    del Ad
+    
     # Transpose to match ImageJ convention (time, Y, X)
-    tiffSave_raw = tiffSave_raw.transpose((2, 0, 1))
+    tiffSave_raw = tiffSave_raw.transpose((2, 1, 0))
 
     # Save with correct metadata
-    tifffile.imwrite(raw_tif_path, tiffSave_raw.astype(np.float32), imagej=True, metadata={'axes': 'ZYX'})
+    tifffile.imwrite(raw_tif_path, tiffSave_raw, bigtiff=True, imagej=True, metadata={'axes': 'ZYX'})
 
     # Remove from tiffSave memory
     del tiffSave_raw
