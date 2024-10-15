@@ -19,11 +19,11 @@ from scipy.interpolate import interp1d, PchipInterpolator
 from utils.stripRegistrationBergamo import stripRegistrationBergamo_init
 from utils.suite2pRegistration import suite2pRegistration
 from utils.CaImAnRegistration import CaImAnRegistration
-from aind_data_schema.core.data_description import Funding, RawDataDescription
-from aind_data_schema_models.modalities import Modality
-from aind_data_schema_models.organizations import Organization
-from aind_data_schema_models.pid_names import PIDName
-from aind_data_schema_models.platforms import Platform
+# from aind_data_schema.core.data_description import Funding, RawDataDescription
+# from aind_data_schema_models.modalities import Modality
+# from aind_data_schema_models.organizations import Organization
+# from aind_data_schema_models.pid_names import PIDName
+# from aind_data_schema_models.platforms import Platform
 import logging
 from tenacity import retry, stop_after_attempt, wait_fixed
 import warnings
@@ -56,7 +56,7 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
     Ad = np.transpose(Ad, (2, 3, 1, 0))
     Ad = Ad[params['removeLines']:, :, :, :]
 
-    Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug
+    # Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug
 
     initFrames = 1000
     name, ext = os.path.splitext(os.path.basename(fn))

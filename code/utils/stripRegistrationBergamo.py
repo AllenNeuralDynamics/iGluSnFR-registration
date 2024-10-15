@@ -17,19 +17,9 @@ from scipy.ndimage import convolve, shift
 from tifffile import tifffile
 import matplotlib.pyplot as plt
 from numba import jit, int64, float32, prange
+from utils.xcorr2_nans import xcorr2_nans as cython_xcorr2_nans
 
-@jit(float32[:,:](float32[:], float32[:], int64[:], int64[:], int64), nopython=False, error_model="numpy", parallel=True)
-def optimized_calculate_correlation(F, templ, tValidInd, shifts, cols):
-    n = shifts.shape[0]
-    C = np.empty((n,n), dtype=np.float32)
-    for drix in prange(n):
-        for dcix in range(n):
-            T = templ[tValidInd - shifts[drix] * cols - shifts[dcix]]
-            ssT = T.dot(T)
-            C[drix, dcix] = np.ascontiguousarray(F).dot(T) / np.sqrt(ssT)
-    return C
-
-def xcorr2_nans(frame, template, shiftsCenter, dShift):
+def fast_xcorr2_nans(frame, template, shiftsCenter, dShift):
     """
     Perform a somewhat-efficient local normalized cross-correlation for images with NaNs.
     
@@ -43,68 +33,35 @@ def xcorr2_nans(frame, template, shiftsCenter, dShift):
     - motion: the calculated motion vector
     - R: the correlation coefficient
     """
-    # Create a kernel for dilation using OpenCV
-    kernel_size = (2 * dShift + 1, 2 * dShift + 1)
-    SE = np.ones(kernel_size, dtype=np.uint8)
+    # Create structuring element for dilation
+    SE = np.ones((2 * dShift + 1, 2 * dShift + 1), dtype=np.uint8)
 
-    # Measure the time for the dilation operation
-    start_dilation = time.time()
-
-    # Use cv2.dilate to handle dilation operation
-    template_nan_mask = np.isnan(template).astype(np.uint8)
-    dilated_template_nan_mask = cv2.dilate(template_nan_mask, SE)
-
-    # Shift the dilated mask and create valid mask for frame
-    fValid = ~np.isnan(frame) & shift(~dilated_template_nan_mask.astype(bool), shiftsCenter)
-    end_dilation = time.time()
-    dilation_time = end_dilation - start_dilation
-    print(f"Dilation took {dilation_time:.6f} seconds")
-
-    fValid[:dShift, :] = False
-    fValid[-dShift:, :] = False
-    fValid[:, :dShift] = False
-    fValid[:, -dShift:] = False
-
-    # Get the dimensions of the image
-    rows, cols = fValid.shape[:2]
-
-    # Create the transformation matrix for shifting
+    # Valid pixels of the new frame
+    rows, cols = template.shape
     M = np.float32([[1, 0, shiftsCenter[0]], [0, 1, shiftsCenter[1]]])
+    tmp = cv2.warpAffine(1-cv2.dilate(np.isnan(template).astype(np.uint8), SE, iterations=1), M, (cols, rows),
+                            borderMode=cv2.BORDER_CONSTANT, flags=cv2.INTER_NEAREST).astype(bool)
+    fValid = np.zeros(frame.shape, dtype=bool)
+    fValid[dShift:-dShift, dShift:-dShift] = ~np.isnan(frame[dShift:-dShift, dShift:-dShift]) & tmp[dShift:-dShift, dShift:-dShift]
 
-    # Apply warpAffine with the translation matrix
     tValid = cv2.warpAffine(fValid.astype(np.uint8), M, (cols, rows)).astype(bool)
 
-    F = frame[fValid] # fixed data
-    ssF = np.sqrt(np.sum(F**2))
+    F = frame[fValid]  # fixed data
+    ssF = np.sqrt(F.dot(F))
 
-    shifts = np.arange(-dShift, dShift + 1)
-    C = np.full((len(shifts), len(shifts)), np.nan)
-
-    # Measure time for the for loop
-    start_loop = time.time()
-
-    #generate drix, dcix in advance. Try to do the translation 
-    # for drix, dcix in np.ndindex(len(shifts), len(shifts)):
-    #     T = template[np.roll(tValid, (-shifts[drix], -shifts[dcix]), axis=(0, 1))]
-    #     ssT = np.sum(T**2)
-    #     C[drix, dcix] = np.sum(F * T) / np.sqrt(ssT)
-
+    # Correlation is sum(A.*B)./(sqrt(ssA)*sqrt(ssB)); ssB is constant though
     tV0, tV1 = np.where(tValid)
     tValidInd = tV0 * cols + tV1
     shifts = np.arange(-dShift, dShift + 1)
-
-    C = optimized_calculate_correlation(F.ravel(), template.ravel().astype(np.float32), tValidInd, shifts, cols)
-
-    end_loop = time.time()
-    loop_time = end_loop - start_loop
-    print(f"For loop took {loop_time:.6f} seconds")
+    C = np.full((len(shifts), len(shifts)), np.nan, dtype="f4")
+    cython_xcorr2_nans(F.ravel(), template.ravel(), tValidInd.astype("i4"), shifts.astype("i4"), cols, C)
+                
+    # Find maximum of correlation map
     maxval = np.nanmax(C)
-
     if np.isnan(maxval):
         raise ValueError("All-NaN slice encountered in cross-correlation.")
-
+    
     rr, cc = np.unravel_index(np.nanargmax(C), C.shape)
-
     R = maxval / ssF  # correlation coefficient
 
     if 1 < rr < len(shifts) - 1 and 1 < cc < len(shifts) - 1:
@@ -117,12 +74,11 @@ def xcorr2_nans(frame, template, shiftsCenter, dShift):
 
         motion = shiftsCenter + np.array([shifts[rr] - dR, shifts[cc] - dC])
     else:
-         # The optimum is at an edge of search range; no superresolution
+        # The optimum is at an edge of search range; no superresolution
         motion = shiftsCenter + np.array([shifts[rr], shifts[cc]])
 
     if np.any(np.isnan(motion)):
         raise ValueError("NaN encountered in motion calculation.")
-
     return motion, R
 
 def downsampleTime(Y, ds_time):
@@ -340,17 +296,11 @@ def dftups(inp, nor, noc, usfac, roff=0, coff=0):
 def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, alpha, numChannels, path_template_list, output_path_):
     if ds_time is None:
         ds_time = 3  # the movie is downsampled using averaging in time by a factor of 2^ds_time
-    
-    print('Ad shape---->', Ad.shape)
 
     dsFac = 2 ** ds_time
 
-    print('dsFac----->', dsFac)
-    print('ds_time----->', ds_time)
-
     framesToRead = initFrames * dsFac
 
-    print('framesToRead----->', framesToRead)
     # Downsample the data
     Y = downsampleTime(Ad[:, :, :, :framesToRead], ds_time)
 
@@ -363,20 +313,14 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Sum along the third dimension and squeeze the array
     # Yhp = np.squeeze(np.sum(Y,2))
 
-    print('Y shape---->', Y.shape)
     Yhp = np.sum(Y[:, :, selCh, :].reshape(Y.shape[0], Y.shape[1], -1, Y.shape[3]), axis=2).squeeze()
-
-    print('Yhp shape---->', Yhp.shape)
 
     # Reshape Yhp to 2D where each column is a frame
     reshaped_Yhp = Yhp.reshape(-1, Yhp.shape[2])
-
-    # print('reshaped_Yhp shape---->', reshaped_Yhp.shape)
     
     # Calculate the correlation matrix
     rho = np.corrcoef(reshaped_Yhp.T)
 
-    # print('rho shape---->', rho.shape)
 
     # Compute the distance matrix
     dist_matrix = 1 - rho
@@ -397,8 +341,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     Z[:, :2] = np.ceil(Z[:, :2]).astype(int)
 
     # Z = Z[:, :-1] # Matlab produces just 3 columns
-    # print('Z shape---->', Z.shape)
-    # print('Z---->', Z)
+
     # Define the cutoff value
     cutoff = 0.01
 
@@ -427,11 +370,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         
         # Group indices by cluster label
         clusters = [np.where(T == label)[0] for label in np.unique(T)]
-    
-    # print('T shape---->', T.shape)
-    # print('T---->', T)
-    # print('clusters shape---->', len(clusters))
-    # print('clusters---->', clusters)
 
     # Initialize max_mean_corr to negative infinity
     max_mean_corr = -np.inf
@@ -447,9 +385,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             if mean_corr > max_mean_corr:
                 max_mean_corr = mean_corr
                 best_cluster = cluster_indices
-    
-    print('best_cluster---->', best_cluster)
-    print('max_mean_corr---->', max_mean_corr)
 
     corrector = MotionCorrect(lazy_dataset=Yhp.transpose(2, 0, 1),
                             max_shifts=(maxshift, maxshift),  # Maximum allowed shifts in pixels
@@ -465,7 +400,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     #     corrected_frames[:, :, i] = corrected_frame
 
-    print('np.mean(Yhp[:, :, best_cluster], axis=2)', np.mean(Yhp[:, :, best_cluster], axis=2).shape)
     frame_corrector, output_file = corrector.motion_correct(
         template=np.mean(Yhp[:, :, best_cluster], axis=2), save_movie=True
     )
@@ -486,11 +420,8 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     template = ScanImageTiffReader(path_template) # TODO: Replace with tifffilereader
 
     F = template.data()
-    print('F = template.data()-------->', F.shape)
     F = np.transpose(F, (1, 2, 0))
-    print('F transpose-------->', F.shape)
     F = np.mean(F, axis=2)
-    print('F mean-------->', F.shape)
 
     # Create a template with NaNs
     template = np.full((2*maxshift + sz[0], 2*maxshift + sz[1]), np.nan)
@@ -519,17 +450,12 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     aRankCorr = np.nan * np.ones(nDSframes)
     recNegErr = np.nan * np.ones(nDSframes)
 
-    print('nDSframes-------->', nDSframes)
-
     # Create view matrices for interpolation
     viewR, viewC = np.meshgrid(
         np.arange(0, sz[0] + 2 * maxshift) - maxshift, #sz in matlab is 121, 45, 1, 10000
         np.arange(0, sz[1] + 2 * maxshift) - maxshift,
         indexing='ij'  # 'ij' for matrix indexing to match MATLAB's ndgrid
     )
-
-    print('maxshift------->', maxshift)
-    print('viewR-------->', viewR.shape)
 
     print('Strip Registeration...')
     aData = {} # Alignment data dictionary
@@ -585,7 +511,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             print(f"Time for cv2_remap: {end_cv2_remap - start_cv2_remap:.4f} seconds")
 
             start_xcorr2_nans = time.time()
-            motion, R = xcorr2_nans(Mfull, Ttmp, np.array([initR, initC]), 50)
+            motion, R = fast_xcorr2_nans(Mfull.astype(np.float32), Ttmp.astype(np.float32), np.array([initR, initC]), 50)
             end_xcorr2_nans = time.time()
             print(f"Time for xcorr2_nans: {end_xcorr2_nans - start_xcorr2_nans:.4f} seconds")
 
@@ -631,9 +557,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         end_total = time.time()  # End timing for the entire loop
         print(f"Total time for DSframe {DSframe}: {end_total - start_total:.4f} seconds\n")
 
-    print('motionDSr---------->', motionDSr.shape)
-    print('motionDSc---------->', motionDSc.shape)
-
     # Upsample the shifts and compute a tighter field of view
     tDS = np.multiply(np.arange(1, nDSframes+1), dsFac) - 2**(ds_time-1) + 0.5
 
@@ -659,10 +582,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     maxshiftC = np.max(np.abs(motionC))
     maxshiftR = np.max(np.abs(motionR))
-    print('maxshiftC---------->', maxshiftC)
-    print('maxshiftR---------->', maxshiftR)
-    
-    print('sz---------->', sz)
 
     viewR, viewC = np.meshgrid(
         np.arange(0, sz[0] + 2 * maxshiftR) - maxshiftR,
@@ -682,12 +601,8 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Bsum = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
     # Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels))
 
-    print('viewR---------->', viewR.shape)
-
     # Initialize tiffSave array
     tiffSave = np.zeros((viewR.shape[1], viewR.shape[0], nDSframes * numChannels), dtype=np.float32)
-
-    print('tiffSave---------->', tiffSave.shape)
 
     # Initialize Bcount and Bsum arrays
     Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels), dtype=np.float32)
@@ -714,9 +629,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Calculate nanRows and nanCols correctly
     nanRows = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=1) == 1
     nanCols = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=0) == 1
-
-    print('nanRows----->', nanRows.shape)
-    print('nanCols----->', nanCols.shape)
 
     # Apply boolean indexing to tiffSave
     tiffSave = tiffSave[~nanRows, :, :]

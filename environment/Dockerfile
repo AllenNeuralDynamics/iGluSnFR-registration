@@ -1,4 +1,4 @@
-# hash:sha256:8e0c0a467012842bd122024cbf04a339a4526aa9e634866e962fa3f0203e95cf
+# hash:sha256:fdd3555c5ae1bf9d39a2590b251aff1dad2f492507265ce0eaf24b245f14c5ff
 ARG REGISTRY_HOST
 FROM $REGISTRY_HOST/codeocean/mambaforge3:23.1.0-4-python3.10.12-ubuntu22.04
 
@@ -8,12 +8,18 @@ ARG GIT_ASKPASS
 ARG GIT_ACCESS_TOKEN
 COPY git-askpass /
 
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        build-essential=12.9ubuntu3 \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN mamba install -y \
         caiman==1.11.0 \
     && mamba clean -ya
 
 RUN pip install -U --no-cache-dir \
     aind-data-schema==0.37.3 \
+    cython==3.0.11 \
     dateparser==1.2.0 \
     jnormcorre==1.0.0 \
     matplotlib==3.9.0 \
