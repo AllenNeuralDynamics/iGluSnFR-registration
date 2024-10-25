@@ -18,7 +18,53 @@ from tifffile import tifffile
 import matplotlib.pyplot as plt
 from numba import jit, int64, float32, prange
 from utils.xcorr2_nans import xcorr2_nans as cython_xcorr2_nans
+from multiprocessing import Pool, cpu_count
 
+def process_chunk(args):
+    Ad_chunk, viewR, viewC, numChannels, nanRows, nanCols, motionC, motionR, start_frame, end_frame = args
+    
+    chunk_shape = (viewR.shape[1] - sum(nanRows), viewR.shape[0] - sum(nanCols), (end_frame - start_frame) * numChannels)
+    tiffSave_raw_chunk = np.zeros(chunk_shape, dtype=np.float32)
+
+    x_grid = np.array([viewR + motionR_frame for motionR_frame in motionR[start_frame:end_frame]])
+    y_grid = np.array([viewC + motionC_frame for motionC_frame in motionC[start_frame:end_frame]])
+
+    rows_to_keep = ~nanRows.astype(bool)
+    cols_to_keep = ~nanCols.astype(bool)
+
+    for ch in range(numChannels):
+        for i, frame in enumerate(range(start_frame, end_frame)):
+            B = cv2.remap(Ad_chunk[:, :, ch, i], 
+                          y_grid[i].astype(np.float32), 
+                          x_grid[i].astype(np.float32), 
+                          cv2.INTER_LINEAR, 
+                          borderMode=cv2.BORDER_CONSTANT, 
+                          borderValue=np.nan)
+
+            B = B[cols_to_keep, :][:, rows_to_keep]
+            tiffSave_raw_chunk[:, :, i*numChannels+ch] = B.T
+
+    return tiffSave_raw_chunk
+
+def process_raw_frames_cpu(Ad, viewR, viewC, numChannels, nanRows, nanCols, motionC, motionR):
+    num_frames = len(motionC)
+    num_cores = cpu_count()
+    chunk_size = num_frames // num_cores
+
+    chunks = []
+    for i in range(num_cores):
+        start_frame = i * chunk_size
+        end_frame = start_frame + chunk_size if i < num_cores - 1 else num_frames
+        chunk_args = (Ad[:, :, :, start_frame:end_frame], viewR, viewC, numChannels, nanRows, nanCols, 
+                      motionC, motionR, start_frame, end_frame)
+        chunks.append(chunk_args)
+
+    with Pool(num_cores) as pool:
+        results = pool.map(process_chunk, chunks)
+
+    tiffSave_raw = np.concatenate(results, axis=2)
+    return tiffSave_raw
+    
 def fast_xcorr2_nans(frame, template, shiftsCenter, dShift):
     """
     Perform a somewhat-efficient local normalized cross-correlation for images with NaNs.
@@ -430,12 +476,13 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     template[maxshift:maxshift+sz[0], maxshift:maxshift+sz[1]] = F
 
     # template = np.transpose(template)
-
+    print('template Shape----->', template.shape)
     # Copy the template to T0
     T0 = template.copy()
 
     # Create T00 as a zero matrix of the same size as template
     T00 = np.zeros_like(template)
+    templateCt = np.zeros_like(template)
 
     initR = 0
     initC = 0
@@ -459,7 +506,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     print('Strip Registeration...')
     aData = {} # Alignment data dictionary
-
+    
     for DSframe in range(0, nDSframes):
         start_total = time.time()  # Start timing for the entire loop
 
@@ -467,14 +514,14 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         start_read_frames = time.time()
         readFrames = list(range((DSframe) * dsFac, (DSframe) * dsFac + dsFac))
         end_read_frames = time.time()
-        print(f"Time for reading frames: {end_read_frames - start_read_frames:.4f} seconds")
+        # print(f"Time for reading frames: {end_read_frames - start_read_frames:.4f} seconds")
 
         # Timing for downsampling and reshaping
         start_downsample = time.time()
         M = downsampleTime(Ad[:, :, :, readFrames], ds_time)
         M = np.sum(M[:,:,selCh,:].reshape(M.shape[0], M.shape[1], -1, M.shape[3]), axis=2).squeeze()
         end_downsample = time.time()
-        print(f"Time for downsampling and reshaping: {end_downsample - start_downsample:.4f} seconds")
+        # print(f"Time for downsampling and reshaping: {end_downsample - start_downsample:.4f} seconds")
 
         if DSframe % 1000 == 0:
             print(f'{DSframe} of {nDSframes}')
@@ -484,13 +531,13 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         Ttmp = np.nanmean(np.dstack((T0, T00, template)), axis=2)
         T = Ttmp[maxshift-initR : maxshift-initR+sz[0], maxshift-initC : maxshift-initC+sz[1]]
         end_template_avg = time.time()
-        print(f"Time for template averaging: {end_template_avg - start_template_avg:.4f} seconds")
+        # print(f"Time for template averaging: {end_template_avg - start_template_avg:.4f} seconds")
 
         # Timing for registration
         start_registration = time.time()
         output, _ = dftregistration_clipped(fft2(M), fft2(T.astype(np.float32)), 4, clipShift)
         end_registration = time.time()
-        print(f"Time for registration: {end_registration - start_registration:.4f} seconds")
+        # print(f"Time for registration: {end_registration - start_registration:.4f} seconds")
 
         motionDSr[DSframe] = initR + output[2]
         motionDSc[DSframe] = initC + output[3]
@@ -508,18 +555,18 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             map_y = np.float32(viewR)
             Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
             end_cv2_remap = time.time()
-            print(f"Time for cv2_remap: {end_cv2_remap - start_cv2_remap:.4f} seconds")
+            # print(f"Time for cv2_remap: {end_cv2_remap - start_cv2_remap:.4f} seconds")
 
             start_xcorr2_nans = time.time()
             motion, R = fast_xcorr2_nans(Mfull.astype(np.float32), Ttmp.astype(np.float32), np.array([initR, initC]), 50)
             end_xcorr2_nans = time.time()
-            print(f"Time for xcorr2_nans: {end_xcorr2_nans - start_xcorr2_nans:.4f} seconds")
+            # print(f"Time for xcorr2_nans: {end_xcorr2_nans - start_xcorr2_nans:.4f} seconds")
 
             motionDSr[DSframe] = motion[0]
             motionDSc[DSframe] = motion[1]
             aErrorDS[DSframe] = R
             end_correction = time.time()
-            print(f"Time for correction: {end_correction - start_correction:.4f} seconds")
+            # print(f"Time for correction: {end_correction - start_correction:.4f} seconds")
 
         # Timing for interpolation and smoothing
         if abs(motionDSr[DSframe]) < maxshift and abs(motionDSc[DSframe]) < maxshift:
@@ -537,26 +584,38 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             aRankCorr[DSframe] = np.corrcoef(Asmooth[selCorr], Ttmp[selCorr])[0, 1]
             recNegErr[DSframe] = np.mean(np.power(np.minimum(0, Asmooth[selCorr] * np.mean(Ttmp[selCorr]) / np.mean(Asmooth[selCorr]) - Ttmp[selCorr]), 2))
             
-            templateCt = np.isnan(template).astype(int)
-            template = np.where(np.isnan(template), 0, template)
-            template = np.where(np.isnan(A), template, template * templateCt + A)
-            templateCt += (~np.isnan(A)).astype(int)
-            template /= templateCt
+            # Sum along the third axis, ignoring NaNs
+            template = np.nansum(np.stack((template * templateCt, A), axis=2), axis=2)
+
+            # Update templateCt by adding 1 where A is not NaN
+            templateCt = templateCt + ~np.isnan(A)
+
+            # Divide template by templateCt
+            template = template / templateCt
+
+            # Set elements of template to NaN where templateCt is less than 100
             template[templateCt < 100] = np.nan
             
             initR = round(motionDSr[DSframe])
             initC = round(motionDSc[DSframe])
             
             end_interpolation_smoothing = time.time()
-            print(f"Time for interpolation and smoothing: {end_interpolation_smoothing - start_interpolation_smoothing:.4f} seconds")
+            # print(f"Time for interpolation and smoothing: {end_interpolation_smoothing - start_interpolation_smoothing:.4f} seconds")
         
         else:
             motionDSr[DSframe] = initR
             motionDSc[DSframe] = initC
 
         end_total = time.time()  # End timing for the entire loop
-        print(f"Total time for DSframe {DSframe}: {end_total - start_total:.4f} seconds\n")
+        # print(f"Total time for DSframe {DSframe}: {end_total - start_total:.4f} seconds\n")
+    # Assuming motionDSr is already defined as a numpy array or a list
+    plt.plot(motionDSr)
+    plt.xlabel('Frame')
+    plt.ylabel('Motion DSr')
+    plt.title('Motion DSr over Frames')
 
+    # Save the plot with 500 DPI
+    plt.savefig('motionDSr_plot.png', dpi=500)
     # Upsample the shifts and compute a tighter field of view
     tDS = np.multiply(np.arange(1, nDSframes+1), dsFac) - 2**(ds_time-1) + 0.5
 
@@ -608,6 +667,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels), dtype=np.float32)
     Bsum = np.zeros((viewR.shape[0], viewR.shape[1], numChannels), dtype=np.float64)
 
+    tiffSave_time_start = time.time()
     for DSframe in range(nDSframes):
         readFrames = (DSframe * dsFac) + np.arange(dsFac)
         YY = downsampleTime(Ad[:, :, :, readFrames], ds_time)
@@ -626,10 +686,13 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             B[np.isnan(B)] = 0
             Bsum[:, :, ch] += B.astype(np.float64)
 
+    tiffSave_time_end = time.time()
+    print(f"Total time for tiffSave_raw: {tiffSave_time_end - tiffSave_time_start:.4f} seconds\n")
+    
     # Calculate nanRows and nanCols correctly
     nanRows = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=1) == 1
     nanCols = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=0) == 1
-
+    
     # Apply boolean indexing to tiffSave
     tiffSave = tiffSave[~nanRows, :, :]
     tiffSave = tiffSave[:, ~nanCols, :]
@@ -638,7 +701,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     tiffSave = tiffSave.transpose((2, 1, 0))
 
     # Save tiff
-    tifffile.imwrite(downsampled_tif_path, tiffSave, imagej=True, metadata={'axes': 'ZYX'})
+    tifffile.imwrite(downsampled_tif_path, tiffSave, imagej=True, metadata={'axes': 'ZYX'}, maxworkers=os.cpu_count())
 
     # Remove from tiffSave memory
     del tiffSave
@@ -662,44 +725,23 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         tifffile.imwrite(channel_mean_path, Bmean.astype(np.float32))
 
     raw_tif_path = f"{base_name}_REGISTERED_RAW{ext}"
-
-    # Calculate the size of the new array
-    new_size = np.array(viewR.shape)[[1, 0]] - np.array([np.sum(nanRows), np.sum(nanCols)])
-
-    # Append the third dimension size
-    new_size = np.append(new_size, len(motionC) * numChannels)
-
-    # Create the new array filled with zeros
-    tiffSave_raw = np.zeros(new_size, dtype=np.float32)
-
-    # Save registered raw Tiffs
-    for frame in range(len(motionC)):
-        for ch in range(numChannels):
-            # Create grid points
-            x, y = np.meshgrid(np.arange(0, sz[1]), np.arange(0, sz[0]))
-            
-            # Calculate new grid points
-            xi = viewC + motionC[frame]
-            yi = viewR + motionR[frame]
-            
-            # Perform interpolation using cv2.rempa over scipy griddata
-            B = cv2.remap(Ad[:, :, ch, frame], xi.astype(np.float32), yi.astype(np.float32), cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
-
-            B = B[~nanCols, :]
-            B = B[:, ~nanRows]
-
-            tiffSave_raw[:, :, (frame-1)*numChannels+ch] = B.T.astype(np.float32)
-            
-            # Append the interpolated image to the list
-            # interpolated_images.append(B)
-    
+    tiffSave_raw_time_start = time.time()  
+    tiffSave_raw = process_raw_frames_cpu(Ad, viewR, viewC, numChannels, nanRows, nanCols, motionC, motionR)
+    tiffSave_raw_time_end = time.time()
+    print(f"Total time for tiffSave_raw: {tiffSave_raw_time_end - tiffSave_raw_time_start:.4f} seconds\n")
     del Ad
     
     # Transpose to match ImageJ convention (time, Y, X)
+    tiffSave_raw_time_transpose_start = time.time()
     tiffSave_raw = tiffSave_raw.transpose((2, 1, 0))
-
+    tiffSave_raw_time_transpose_end = time.time()
+    print(f"Total time for tiffSave_raw transpose: {tiffSave_raw_time_transpose_end - tiffSave_raw_time_transpose_start:.4f} seconds\n")
+    
     # Save with correct metadata
-    tifffile.imwrite(raw_tif_path, tiffSave_raw, bigtiff=True, imagej=True, metadata={'axes': 'ZYX'})
+    tiffSave_raw_time_tiffwrite_start = time.time()
+    tifffile.imwrite(raw_tif_path, tiffSave_raw, bigtiff=True, imagej=True, metadata={'axes': 'ZYX'}, maxworkers=os.cpu_count())
+    tiffSave_raw_time_tiffwrite_end = time.time()
+    print(f"Total time for tiffSave_raw transpose: {tiffSave_raw_time_tiffwrite_end - tiffSave_raw_time_tiffwrite_start:.4f} seconds\n")
 
     # Remove from tiffSave memory
     del tiffSave_raw
