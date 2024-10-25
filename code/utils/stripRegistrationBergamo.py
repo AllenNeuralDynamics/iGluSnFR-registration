@@ -19,6 +19,11 @@ import matplotlib.pyplot as plt
 from numba import jit, int64, float32, prange
 from utils.xcorr2_nans import xcorr2_nans as cython_xcorr2_nans
 from multiprocessing import Pool, cpu_count
+import numpy as np
+from scipy.ndimage import gaussian_filter
+from scipy.interpolate import RegularGridInterpolator
+from scipy.stats import spearmanr
+import warnings
 
 def process_chunk(args):
     Ad_chunk, viewR, viewC, numChannels, nanRows, nanCols, motionC, motionR, start_frame, end_frame = args
@@ -490,6 +495,9 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Calculate the number of downsampled frames
     nDSframes = np.floor(sz[3] / dsFac).astype(int)  # Using sz[3] as it corresponds to MATLAB's sz(4)
 
+    print('Strip Registeration...')
+    aData = {} # Alignment data dictionary
+    
     # Initialize arrays to store the inferred motion and errors
     motionDSr = np.nan * np.ones(nDSframes)
     motionDSc = np.nan * np.ones(nDSframes)
@@ -499,53 +507,46 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
 
     # Create view matrices for interpolation
     viewR, viewC = np.meshgrid(
-        np.arange(0, sz[0] + 2 * maxshift) - maxshift, #sz in matlab is 121, 45, 1, 10000
+        np.arange(0, sz[0] + 2 * maxshift) - maxshift,
         np.arange(0, sz[1] + 2 * maxshift) - maxshift,
-        indexing='ij'  # 'ij' for matrix indexing to match MATLAB's ndgrid
+        indexing='ij'
     )
 
-    print('Strip Registeration...')
-    aData = {} # Alignment data dictionary
-    
-    for DSframe in range(0, nDSframes):
-        start_total = time.time()  # Start timing for the entire loop
-
-        # Timing for reading frames
-        start_read_frames = time.time()
-        readFrames = list(range((DSframe) * dsFac, (DSframe) * dsFac + dsFac))
-        end_read_frames = time.time()
-        # print(f"Time for reading frames: {end_read_frames - start_read_frames:.4f} seconds")
-
-        # Timing for downsampling and reshaping
-        start_downsample = time.time()
+    for DSframe in range(nDSframes):
+        read_start = DSframe * dsFac
+        read_end = read_start + dsFac
+        readFrames = np.arange(read_start, read_end)
+        
         M = downsampleTime(Ad[:, :, :, readFrames], ds_time)
         M = np.sum(M[:,:,selCh,:].reshape(M.shape[0], M.shape[1], -1, M.shape[3]), axis=2).squeeze()
-        end_downsample = time.time()
-        # print(f"Time for downsampling and reshaping: {end_downsample - start_downsample:.4f} seconds")
-
+        
         if DSframe % 1000 == 0:
-            print(f'{DSframe} of {nDSframes}')
-
-        # Timing for template averaging
-        start_template_avg = time.time()
-        Ttmp = np.nanmean(np.dstack((T0, T00, template)), axis=2)
-        T = Ttmp[maxshift-initR : maxshift-initR+sz[0], maxshift-initC : maxshift-initC+sz[1]]
-        end_template_avg = time.time()
-        # print(f"Time for template averaging: {end_template_avg - start_template_avg:.4f} seconds")
-
-        # Timing for registration
-        start_registration = time.time()
+            print(f"Frame {DSframe} of {nDSframes}: MotionDSc={motionDSc[DSframe]}, MotionDSr={motionDSr[DSframe]}, aErrorDS={aErrorDS[DSframe]}")
+        
+        Ttmp = np.nanmean(np.stack([T0, T00, template], axis=2), axis=2)
+        T = Ttmp[maxshift - initR : maxshift - initR + sz[0],
+                maxshift - initC : maxshift - initC + sz[1]]
+        
+        # Perform DFT-based registration
         output, _ = dftregistration_clipped(fft2(M), fft2(T.astype(np.float32)), 4, clipShift)
-        end_registration = time.time()
-        # print(f"Time for registration: {end_registration - start_registration:.4f} seconds")
-
+        
+        # Handle DeprecationWarning by ensuring scalar assignment
+        try:
+            aErrorDS[DSframe] = output[0].item() if hasattr(output[0], 'item') else output[0].squeeze()
+        except AttributeError:
+            aErrorDS[DSframe] = output[0]  # Fallback if .item() is not available
+        
         motionDSr[DSframe] = initR + output[2]
         motionDSc[DSframe] = initC + output[3]
-        aErrorDS[DSframe] = output[0]
-
-        # Timing for condition check and correction
-        if np.sqrt((motionDSr[DSframe] / sz[0])**2 + (motionDSc[DSframe] / sz[1])**2) > 0.75**2:
-            start_correction = time.time()
+        
+        # Limit the motion correction
+        motionDSr[DSframe] = np.clip(motionDSr[DSframe], -maxshift, maxshift)
+        motionDSc[DSframe] = np.clip(motionDSc[DSframe], -maxshift, maxshift)
+        
+        norm_motion = np.sqrt((motionDSr[DSframe] / sz[0])**2 + (motionDSc[DSframe] / sz[1])**2)
+        y = np.arange(sz[0])
+        x = np.arange(sz[1])
+        if norm_motion > 0.75**2:  # Adjusted threshold
             x = np.arange(sz[1])
             y = np.arange(sz[0])
             mesh_x, mesh_y = np.meshgrid(x, y)
@@ -554,23 +555,26 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             map_x = np.float32(viewC)
             map_y = np.float32(viewR)
             Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
-            end_cv2_remap = time.time()
-            # print(f"Time for cv2_remap: {end_cv2_remap - start_cv2_remap:.4f} seconds")
-
-            start_xcorr2_nans = time.time()
+            
+            # Validate interpolation output
+            nan_ratio = np.isnan(Mfull).sum() / Mfull.size
+            if nan_ratio > 0.1:
+                # print(f"High NaN ratio in Mfull: {nan_ratio}. Skipping motion update for frame {DSframe}.")
+                motionDSr[DSframe] = initR
+                motionDSc[DSframe] = initC
+                continue
+            
             motion, R = fast_xcorr2_nans(Mfull.astype(np.float32), Ttmp.astype(np.float32), np.array([initR, initC]), 50)
-            end_xcorr2_nans = time.time()
-            # print(f"Time for xcorr2_nans: {end_xcorr2_nans - start_xcorr2_nans:.4f} seconds")
-
+            
             motionDSr[DSframe] = motion[0]
             motionDSc[DSframe] = motion[1]
             aErrorDS[DSframe] = R
-            end_correction = time.time()
-            # print(f"Time for correction: {end_correction - start_correction:.4f} seconds")
-
-        # Timing for interpolation and smoothing
+        
+        # # Ensure motion stays within limits
+        # motionDSr[DSframe] = np.clip(motionDSr[DSframe], -maxshift, maxshift)
+        # motionDSc[DSframe] = np.clip(motionDSc[DSframe], -maxshift, maxshift)
+        
         if abs(motionDSr[DSframe]) < maxshift and abs(motionDSc[DSframe]) < maxshift:
-            start_interpolation_smoothing = time.time()
             X, Y = np.meshgrid(np.arange(0, sz[1]), np.arange(0, sz[0]))
             
             Xq = viewC + motionDSc[DSframe]
@@ -580,42 +584,59 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             
             Asmooth = cv2.GaussianBlur(A, (0, 0), sigmaX=1)
             
-            selCorr = ~(np.isnan(Asmooth) | np.isnan(Ttmp))
-            aRankCorr[DSframe] = np.corrcoef(Asmooth[selCorr], Ttmp[selCorr])[0, 1]
-            recNegErr[DSframe] = np.mean(np.power(np.minimum(0, Asmooth[selCorr] * np.mean(Ttmp[selCorr]) / np.mean(Asmooth[selCorr]) - Ttmp[selCorr]), 2))
+            selCorr = ~np.isnan(Asmooth) & ~np.isnan(Ttmp)
+            if np.any(selCorr):
+                # Suppress ConstantInputWarning temporarily
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore", category=RuntimeWarning)
+                    if np.std(Asmooth[selCorr]) > 0 and np.std(Ttmp[selCorr]) > 0 and len(Asmooth[selCorr]) > 1:
+                        aRankCorr[DSframe], _ = spearmanr(Asmooth[selCorr], Ttmp[selCorr])
+                    else:
+                        aRankCorr[DSframe] = np.nan  # or assign a default value like 0
+                # Compute recNegErr safely
+                try:
+                    recNegErr[DSframe] = np.mean(
+                        np.minimum(
+                            0,
+                            (Asmooth[selCorr] * np.mean(Ttmp[selCorr]) / np.mean(Asmooth[selCorr])) - Ttmp[selCorr]
+                        )**2
+                    )
+                except ZeroDivisionError:
+                    recNegErr[DSframe] = np.nan  # or another default/error value
             
-            # Sum along the third axis, ignoring NaNs
-            template = np.nansum(np.stack((template * templateCt, A), axis=2), axis=2)
-
-            # Update templateCt by adding 1 where A is not NaN
-            templateCt = templateCt + ~np.isnan(A)
-
-            # Divide template by templateCt
-            template = template / templateCt
-
-            # Set elements of template to NaN where templateCt is less than 100
-            template[templateCt < 100] = np.nan
+            # Update the template safely
+            template = np.nansum(np.stack([template * templateCt, A], axis=2), axis=2)
+            templateCt += ~np.isnan(A)
             
-            initR = round(motionDSr[DSframe])
-            initC = round(motionDSc[DSframe])
+            # Avoid division by zero or NaN by replacing invalid entries
+            valid_mask = templateCt >= 100  # As per the original condition
+            template[valid_mask] /= templateCt[valid_mask]
+            template[~valid_mask] = np.nan  # Assign NaN where the count is insufficient
             
-            end_interpolation_smoothing = time.time()
-            # print(f"Time for interpolation and smoothing: {end_interpolation_smoothing - start_interpolation_smoothing:.4f} seconds")
-        
+            # Monitor and reset template if necessary
+            # template_nan_ratio = np.isnan(template).sum() / template.size
+            # if template_nan_ratio > 0.2:
+            #     # print(f"High NaN ratio in template: {template_nan_ratio}. Resetting template.")
+            #     template = np.zeros_like(template)
+            #     templateCt = np.zeros_like(templateCt)
+            
+            initR = int(round(motionDSr[DSframe]))
+            initC = int(round(motionDSc[DSframe]))
         else:
             motionDSr[DSframe] = initR
             motionDSc[DSframe] = initC
 
         end_total = time.time()  # End timing for the entire loop
         # print(f"Total time for DSframe {DSframe}: {end_total - start_total:.4f} seconds\n")
+    
     # Assuming motionDSr is already defined as a numpy array or a list
+    plt.figure(figsize=(70, 12))
     plt.plot(motionDSr)
     plt.xlabel('Frame')
     plt.ylabel('Motion DSr')
     plt.title('Motion DSr over Frames')
-
-    # Save the plot with 500 DPI
     plt.savefig('motionDSr_plot.png', dpi=500)
+
     # Upsample the shifts and compute a tighter field of view
     tDS = np.multiply(np.arange(1, nDSframes+1), dsFac) - 2**(ds_time-1) + 0.5
 

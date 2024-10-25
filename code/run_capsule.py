@@ -41,6 +41,10 @@ def read_tiff_file(fn):
         imageData = tif.asarray()
         Ad = np.array(imageData, dtype=np.float32)
         print('Shape while reading tiff---->', Ad.shape)
+
+        if len(Ad.shape) == 3:
+            Ad = np.reshape(Ad, (Ad.shape[0], 1, Ad.shape[1],  Ad.shape[2])) # Add channel info
+            
         numChannels = Ad.shape[1]
     return Ad, numChannels  
 
