@@ -13,8 +13,8 @@ set -ex
 
 pwd
 
-python -u run_capsule.py --input ../data/iGluSnFR-Michael-testing --output ../results/
+# python -u run_capsule.py --input ../data/iGluSnFR-Michael-testing --output ../results/
 
-#python -u run_capsule.py --input ../data/scan_00010_20240815_140228_adrian --output ../results/
+python -u run_capsule.py --input ../data/scan_00010_20240815_140228_adrian --output ../results/
 
 # python -u run_capsule.py --input ../data/iGluSnFR-Michael-testing --output ../scratch/testing/

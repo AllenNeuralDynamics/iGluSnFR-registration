@@ -730,20 +730,21 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     del Y
 
     # Save an average image for each channel
-    for ch in range(1, numChannels+1):
-        Bmean = Bsum[:,:,ch-1] / Bcount[:,:,ch-1]
+    for ch in range(1, numChannels + 1):
+        Bmean = Bsum[:, :, ch - 1] / Bcount[:, :, ch - 1]
         minV = np.percentile(Bmean[~np.isnan(Bmean)], 10)
-        maxV = np.percentile(Bmean[~np.isnan(Bmean)], 99.9)
+        maxV = np.max(Bmean[~np.isnan(Bmean)])
         Bmean = (255 * np.sqrt(np.maximum(0, (Bmean - minV) / (maxV - minV)))).astype(np.uint8)
+        
         # Convert nanRows and nanCols to integer arrays
         nanRows_mean_ch = np.array(nanRows, dtype=int)
         nanCols_mean_ch = np.array(nanCols, dtype=int)
-        
+
         # Delete rows and columns
-        Bmean = np.delete(Bmean, nanRows_mean_ch, axis=0)
-        Bmean = np.delete(Bmean, nanCols_mean_ch, axis=1)
+        Bmean = Bmean[~nanCols, :]
+        Bmean = Bmean[:, ~nanRows]        
         channel_mean_path = f"{base_name}_REGISTERED_AVG_CH{ch}_8bit.tif"
-        tifffile.imwrite(channel_mean_path, Bmean.astype(np.float32))
+        tifffile.imwrite(channel_mean_path, Bmean)  
 
     raw_tif_path = f"{base_name}_REGISTERED_RAW{ext}"
     tiffSave_raw_time_start = time.time()  
