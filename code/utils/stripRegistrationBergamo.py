@@ -17,13 +17,15 @@ from scipy.ndimage import convolve, shift
 from tifffile import tifffile
 import matplotlib.pyplot as plt
 from numba import jit, int64, float32, prange
-from utils.xcorr2_nans import xcorr2_nans as cython_xcorr2_nans
+# from utils.xcorr2_nans import xcorr2_nans as cython_xcorr2_nans
 from multiprocessing import Pool, cpu_count
 import numpy as np
 from scipy.ndimage import gaussian_filter
 from scipy.interpolate import RegularGridInterpolator
 from scipy.stats import spearmanr
 import warnings
+from scipy.io import savemat 
+from scipy.io import loadmat
 
 def process_chunk(args):
     Ad_chunk, viewR, viewC, numChannels, nanRows, nanCols, motionC, motionR, start_frame, end_frame = args
@@ -51,6 +53,60 @@ def process_chunk(args):
 
     return tiffSave_raw_chunk
 
+def circshift(arr, shift, axes=None):
+    """
+    Circularly shift the elements of an array.
+
+    Parameters:
+    - arr (np.ndarray): Input array to be shifted.
+    - shift (int, list, or np.ndarray): Number of places by which elements are shifted.
+        - If an integer, the same shift is applied to all axes.
+        - If a list or np.ndarray, each element specifies the shift for the corresponding axis.
+    - axes (int, list of ints, or None, optional): Axis or axes along which to shift.
+        - If None and shift is an integer, shift is applied to all axes.
+        - If None and shift is a list/array, the length of shift must match the number of dimensions in arr.
+        - Can be an integer or a list of integers corresponding to the axes.
+
+    Returns:
+    - np.ndarray: The shifted array.
+
+    Raises:
+    - ValueError: If the length of shift does not match the number of specified axes.
+    """
+    arr = np.asarray(arr)
+    ndim = arr.ndim
+
+    # Handle the axes parameter
+    if axes is None:
+        if isinstance(shift, (int, float)):
+            axes = tuple(range(ndim))
+            shift = (int(shift),) * ndim
+        else:
+            shift = tuple(int(s) for s in shift)
+            if len(shift) != ndim:
+                raise ValueError("Length of shift array must match number of dimensions of arr.")
+            axes = tuple(range(ndim))
+    else:
+        if isinstance(axes, int):
+            axes = (axes,)
+        elif isinstance(axes, (list, tuple, np.ndarray)):
+            axes = tuple(axes)
+        else:
+            raise ValueError("axes must be an int or a list/tuple of ints.")
+
+        if isinstance(shift, (int, float)):
+            shift = (int(shift),) * len(axes)
+        else:
+            shift = tuple(int(s) for s in shift)
+            if len(shift) != len(axes):
+                raise ValueError("Length of shift array must match number of specified axes.")
+
+    # Apply the shifts
+    for axis, s in zip(axes, shift):
+        arr = np.roll(arr, shift=s, axis=axis)
+
+    return arr
+
 def process_raw_frames_cpu(Ad, viewR, viewC, numChannels, nanRows, nanCols, motionC, motionR):
     num_frames = len(motionC)
     num_cores = cpu_count()
@@ -70,68 +126,6 @@ def process_raw_frames_cpu(Ad, viewR, viewC, numChannels, nanRows, nanCols, moti
     tiffSave_raw = np.concatenate(results, axis=2)
     return tiffSave_raw
     
-def fast_xcorr2_nans(frame, template, shiftsCenter, dShift):
-    """
-    Perform a somewhat-efficient local normalized cross-correlation for images with NaNs.
-    
-    Parameters:
-    - frame: the frame to be aligned; this has more NaNs
-    - template: the template
-    - shiftsCenter: the center offset around which to perform a local search
-    - dShift: the maximum shift (scalar, in pixels) to consider on each axis around shiftsCenter
-    
-    Returns:
-    - motion: the calculated motion vector
-    - R: the correlation coefficient
-    """
-    # Create structuring element for dilation
-    SE = np.ones((2 * dShift + 1, 2 * dShift + 1), dtype=np.uint8)
-
-    # Valid pixels of the new frame
-    rows, cols = template.shape
-    M = np.float32([[1, 0, shiftsCenter[0]], [0, 1, shiftsCenter[1]]])
-    tmp = cv2.warpAffine(1-cv2.dilate(np.isnan(template).astype(np.uint8), SE, iterations=1), M, (cols, rows),
-                            borderMode=cv2.BORDER_CONSTANT, flags=cv2.INTER_NEAREST).astype(bool)
-    fValid = np.zeros(frame.shape, dtype=bool)
-    fValid[dShift:-dShift, dShift:-dShift] = ~np.isnan(frame[dShift:-dShift, dShift:-dShift]) & tmp[dShift:-dShift, dShift:-dShift]
-
-    tValid = cv2.warpAffine(fValid.astype(np.uint8), M, (cols, rows)).astype(bool)
-
-    F = frame[fValid]  # fixed data
-    ssF = np.sqrt(F.dot(F))
-
-    # Correlation is sum(A.*B)./(sqrt(ssA)*sqrt(ssB)); ssB is constant though
-    tV0, tV1 = np.where(tValid)
-    tValidInd = tV0 * cols + tV1
-    shifts = np.arange(-dShift, dShift + 1)
-    C = np.full((len(shifts), len(shifts)), np.nan, dtype="f4")
-    cython_xcorr2_nans(F.ravel(), template.ravel(), tValidInd.astype("i4"), shifts.astype("i4"), cols, C)
-                
-    # Find maximum of correlation map
-    maxval = np.nanmax(C)
-    if np.isnan(maxval):
-        raise ValueError("All-NaN slice encountered in cross-correlation.")
-    
-    rr, cc = np.unravel_index(np.nanargmax(C), C.shape)
-    R = maxval / ssF  # correlation coefficient
-
-    if 1 < rr < len(shifts) - 1 and 1 < cc < len(shifts) - 1:
-        # Perform superresolution upsampling
-        ratioR = min(1e6, (C[rr, cc] - C[rr - 1, cc]) / (C[rr, cc] - C[rr + 1, cc]))
-        dR = (1 - ratioR) / (1 + ratioR) / 2
-
-        ratioC = min(1e6, (C[rr, cc] - C[rr, cc - 1]) / (C[rr, cc] - C[rr, cc + 1]))
-        dC = (1 - ratioC) / (1 + ratioC) / 2
-
-        motion = shiftsCenter + np.array([shifts[rr] - dR, shifts[cc] - dC])
-    else:
-        # The optimum is at an edge of search range; no superresolution
-        motion = shiftsCenter + np.array([shifts[rr], shifts[cc]])
-
-    if np.any(np.isnan(motion)):
-        raise ValueError("NaN encountered in motion calculation.")
-    return motion, R
-
 def downsampleTime(Y, ds_time):
     for _ in range(ds_time):
         Y = Y[:, :, :, :2*(Y.shape[3]//2):2] + Y[:, :, :, 1:2*(Y.shape[3]//2):2]
@@ -160,7 +154,23 @@ def evaluate_description(desc):
         parsed_data[key] = value
 
     return parsed_data    
-
+    
+def dftups(inp, nor, noc, usfac, roff=0, coff=0):
+    nr, nc = inp.shape
+    # Compute kernels and obtain DFT by matrix products
+    kernc = np.exp(
+        (-1j * 2 * np.pi / (nc * usfac))
+        * (np.fft.ifftshift(np.arange(nc)) - np.floor(nc/2)).reshape(-1, 1)
+        @ (np.arange(noc) - coff).reshape(1, -1)
+    )
+    kernr = np.exp(
+        (-1j * 2 * np.pi / (nr * usfac))
+        * (np.arange(nor).reshape(-1, 1) - roff)
+        @ (np.fft.ifftshift(np.arange(nr)) - np.floor(nr/2)).reshape(1, -1)
+    )
+    out = kernr @ inp @ kernc
+    return out
+    
 def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
     if clip is None:
         clip = [0, 0]
@@ -190,8 +200,8 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         keep[:, clip[1] // 2 + 1 : -clip[1] // 2] = False
         CC[~keep] = 0
 
-        max1 = np.max(np.real(CC), axis=1)
-        loc1 = np.argmax(np.real(CC), axis=1)
+        max1 = np.max(np.real(CC), axis=0)
+        loc1 = np.argmax(np.real(CC), axis=0)
         max2 = np.max(max1)
         loc2 = np.argmax(max1)
         rloc = loc1[loc2]
@@ -206,31 +216,29 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         md2 = m // 2
         nd2 = n // 2
         if rloc > md2:
-            row_shift = rloc - m
+            row_shift = rloc - m - 1  # Add the -1
         else:
-            row_shift = rloc
+            row_shift = rloc - 1      # Add the -1
 
         if cloc > nd2:
-            col_shift = cloc - n
+            col_shift = cloc - n - 1  # Add the -1
         else:
-            col_shift = cloc
+            col_shift = cloc - 1      # Add the -1
 
         output = [error, diffphase, row_shift, col_shift]
         return output, None
 
     # Partial-pixel shift
     else:
-        # First upsample by a factor of 2 to obtain initial estimate
-        # Embed Fourier data in a 2x larger array
         m, n = buf1ft.shape
         mlarge = m * 2
         nlarge = n * 2
         CC = np.zeros((mlarge, nlarge), dtype=np.complex128)
-        CC[
-            m - (m // 2) : m + (m // 2),
-            n - (n // 2) : n + (n // 2),
-        ] = np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
-
+        # CC[
+        #     m - (m // 2) : m + (m // 2),
+        #     n - (n // 2) : n + (n // 2),
+        # ] = np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
+        CC[m//2:m//2 + m, n//2:n//2 + n] = np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
         # Compute crosscorrelation and locate the peak
         CC = np.fft.ifft2(np.fft.ifftshift(CC))  # Calculate cross-correlation
 
@@ -281,8 +289,8 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
                 )
             ) / (md2 * nd2 * usfac ** 2)
             # Locate maximum and map back to original pixel grid
-            max1 = np.max(np.real(CC), axis=1)
-            loc1 = np.argmax(np.real(CC), axis=1)
+            max1 = np.max(np.real(CC), axis=0) #<--------- was set to axis 0
+            loc1 = np.argmax(np.real(CC), axis=0) #<--------- was set to axis 0
             max2 = np.max(max1)
             loc2 = np.argmax(max1)
             rloc = loc1[loc2]
@@ -295,7 +303,7 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
             row_shift = row_shift + rloc / usfac
             col_shift = col_shift + cloc / usfac
 
-        # If upsampling = 2, no additional pixel shift refinement
+            # If upsampling = 2, no additional pixel shift refinement
         else:
             rg00 = np.sum(buf1ft * np.conj(buf1ft)) / m / n
             rf00 = np.sum(buf2ft * np.conj(buf2ft)) / m / n
@@ -310,39 +318,93 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
             col_shift = 0
         output = [error, diffphase, row_shift, col_shift]
 
-    # Compute registered version of buf2ft
-    if usfac > 0:
-        nr, nc = buf2ft.shape
-        Nr = np.fft.ifftshift(np.arange(-np.fix(nr / 2), np.ceil(nr / 2)))
-        Nc = np.fft.ifftshift(np.arange(-np.fix(nc / 2), np.ceil(nc / 2)))
-        Nc, Nr = np.meshgrid(Nc, Nr)
-        Greg = buf2ft * np.exp(
-            1j * 2 * np.pi * (-row_shift * Nr / nr - col_shift * Nc / nc)
-        )
-        Greg = Greg * np.exp(1j * diffphase)
-    elif usfac == 0:
-        Greg = buf2ft * np.exp(1j * diffphase)
-    else:
-        Greg = None
-
+        # Compute registered version of buf2ft
+        if usfac > 0:
+            nr, nc = buf2ft.shape
+            Nr = np.fft.ifftshift(np.arange(-np.fix(nr / 2), np.ceil(nr / 2)))
+            Nc = np.fft.ifftshift(np.arange(-np.fix(nc / 2), np.ceil(nc / 2)))
+            Nc, Nr = np.meshgrid(Nc, Nr)
+            Greg = buf2ft * np.exp(
+                1j * 2 * np.pi * (-row_shift * Nr / nr - col_shift * Nc / nc)
+            )
+            Greg = Greg * np.exp(1j * diffphase)
+        elif usfac == 0:
+            Greg = buf2ft * np.exp(1j * diffphase)
+        else:
+            Greg = None
     return output, Greg
+    
+def fast_xcorr2_nans(frame, template, shiftsCenter, dShift):
+    dShift = round(dShift)  # Sanity check
 
-def dftups(inp, nor, noc, usfac, roff=0, coff=0):
-    nr, nc = inp.shape
-    # Compute kernels and obtain DFT by matrix products
-    kernc = np.exp(
-        (-1j * 2 * np.pi / (nc * usfac))
-        * (np.fft.ifftshift(np.arange(nc)).reshape(-1, 1) - np.floor(nc / 2))
-        * (np.arange(noc) - coff)
-    )
-    kernr = np.exp(
-        (-1j * 2 * np.pi / (nr * usfac))
-        * (np.arange(nor).reshape(-1, 1) - roff)
-        * (np.fft.ifftshift(np.arange(nr)) - np.floor(nr / 2))
-    )
-    out = np.dot(np.dot(kernr, inp), kernc)
-    return out
+    SE = np.ones((2 * dShift + 1, 2 * dShift + 1), dtype=np.uint8)
 
+    # Valid pixels of the new frame
+    rows, cols = template.shape
+    M = np.float32([[1, 0, shiftsCenter[0]], [0, 1, shiftsCenter[1]]])
+    tmp = cv2.warpAffine(1-cv2.dilate(np.isnan(template).astype(np.uint8), SE, iterations=1), M, (cols, rows),
+                            borderMode=cv2.BORDER_CONSTANT, flags=cv2.INTER_NEAREST).astype(bool)
+    fValid = np.zeros(frame.shape, dtype=bool)
+    fValid[dShift:-dShift, dShift:-dShift] = ~np.isnan(frame[dShift:-dShift, dShift:-dShift]) & tmp[dShift:-dShift, dShift:-dShift]
+
+    tValid = np.roll(fValid, -shiftsCenter, axis=(0, 1)).astype(bool)
+
+    F = frame[fValid]
+    ssF = np.sqrt(F.dot(F))
+
+    # Correlation is sum(A.*B)./(sqrt(ssA)*sqrt(ssB)); ssB is constant though
+    tV0, tV1 = np.where(tValid)
+    tValidInd = tV0 * cols + tV1
+
+    shifts = np.arange(-dShift, dShift + 1)
+    C = np.full((len(shifts), len(shifts)), np.nan)
+    # Print datatypes before the loop
+    for drix, shift_x in enumerate(shifts):
+        for dcix, shift_y in enumerate(shifts):
+            shifted_tValid = np.roll(tValid, (-shift_x, -shift_y), axis=(0, 1))
+            T = template[shifted_tValid]
+            ssT = np.sum(T ** 2)
+            
+            if ssT > 0:  # Only calculate if ssT is greater than zero
+                C[drix, dcix] = np.sum(F * T) / np.sqrt(ssT)
+            else:
+                C[drix, dcix] = np.nan  # Handle cases where ssT is zero
+            
+    # plt.imshow(C)
+    # Find maximum of correlation map
+    maxval = np.nanmax(C)
+    I = np.unravel_index(np.nanargmax(C), C.shape)
+    rr, cc = I
+    R = maxval / ssF  # Correlation coefficient
+
+    if 0 < rr < len(shifts) - 1 and 0 < cc < len(shifts) - 1:
+        # Perform superresolution upsampling
+        ratioR = min(1e6, (C[rr, cc] - C[rr - 1, cc]) / (C[rr, cc] - C[rr + 1, cc]))
+        dR = (1 - ratioR) / (1 + ratioR) / 2
+        ratioC = min(1e6, (C[rr, cc] - C[rr, cc - 1]) / (C[rr, cc] - C[rr, cc + 1]))
+        dC = (1 - ratioC) / (1 + ratioC) / 2
+        motion = shiftsCenter + [shifts[rr] - dR, shifts[cc] - dC]
+    else:
+        # The optimum is at an edge of search range; no superresolution
+        motion = shiftsCenter + [shifts[rr], shifts[cc]]
+
+    if np.any(np.isnan(motion)):
+        raise ValueError('Motion result contains NaN values')
+
+    return motion, R
+
+def matlab_round(x):
+    """
+    Replicates MATLAB's round function behavior
+    
+    In MATLAB:
+    - round(4.5) = 5
+    - round(-4.5) = -5
+    """
+    if x >= 0:
+        return int(np.floor(x + 0.5))
+    else:
+        return int(np.ceil(x - 0.5))
 
 def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, alpha, numChannels, path_template_list, output_path_):
     if ds_time is None:
@@ -371,7 +433,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     
     # Calculate the correlation matrix
     rho = np.corrcoef(reshaped_Yhp.T)
-
 
     # Compute the distance matrix
     dist_matrix = 1 - rho
@@ -443,14 +504,15 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
                             overlaps=(24, 24),  # Overlap between patches
                             max_deviation_rigid=3,  # Maximum deviation for rigid correction
                             pw_rigid = False)  # Number of frames to process in a batch
-
+    # TODO: frames_per_split set it to initFrames (Matlab)
+    
     # corrected_frames = np.zeros_like(Yhp)
     # for i in range(Yhp.shape[2]):
     #     frame = Yhp[:, :, i]
     #     corrected_frame = corrector.register_frames(frame)
 
     #     corrected_frames[:, :, i] = corrected_frame
-
+    print('best_cluster----->', best_cluster)
     frame_corrector, output_file = corrector.motion_correct(
         template=np.mean(Yhp[:, :, best_cluster], axis=2), save_movie=True
     )
@@ -473,9 +535,11 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     F = template.data()
     F = np.transpose(F, (1, 2, 0))
     F = np.mean(F, axis=2)
+    # F = loadmat('/root/capsule/scratch/michael_template_F.mat')['F'] #TODO: Remove this
 
     # Create a template with NaNs
     template = np.full((2*maxshift + sz[0], 2*maxshift + sz[1]), np.nan)
+    templateFull = template
 
     # Insert the matrix F into the template
     template[maxshift:maxshift+sz[0], maxshift:maxshift+sz[1]] = F
@@ -513,6 +577,9 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     )
 
     for DSframe in range(nDSframes):
+        # if DSframe == 106:
+        #     break
+        
         read_start = DSframe * dsFac
         read_end = read_start + dsFac
         readFrames = np.arange(read_start, read_end)
@@ -521,32 +588,21 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         M = np.sum(M[:,:,selCh,:].reshape(M.shape[0], M.shape[1], -1, M.shape[3]), axis=2).squeeze()
         
         if DSframe % 1000 == 0:
-            print(f"Frame {DSframe} of {nDSframes}: MotionDSc={motionDSc[DSframe]}, MotionDSr={motionDSr[DSframe]}, aErrorDS={aErrorDS[DSframe]}")
+            print(f'{DSframe} of {nDSframes}')
+
+        Ttmp = np.nanmean(np.stack((T0, T00, template), axis=2), axis=2)
+        T = Ttmp[
+        maxshift - initR : maxshift - initR + sz[0],
+        maxshift - initC : maxshift - initC + sz[1]
+        ]
         
-        Ttmp = np.nanmean(np.stack([T0, T00, template], axis=2), axis=2)
-        T = Ttmp[maxshift - initR : maxshift - initR + sz[0],
-                maxshift - initC : maxshift - initC + sz[1]]
-        
-        # Perform DFT-based registration
-        output, _ = dftregistration_clipped(fft2(M), fft2(T.astype(np.float32)), 4, clipShift)
-        
-        # Handle DeprecationWarning by ensuring scalar assignment
-        try:
-            aErrorDS[DSframe] = output[0].item() if hasattr(output[0], 'item') else output[0].squeeze()
-        except AttributeError:
-            aErrorDS[DSframe] = output[0]  # Fallback if .item() is not available
+        output,_ = dftregistration_clipped(fft2(M.astype(np.float32)), fft2(T.astype(np.float32)), 4, clipShift)
         
         motionDSr[DSframe] = initR + output[2]
         motionDSc[DSframe] = initC + output[3]
+        aErrorDS[DSframe] = output[0]
         
-        # Limit the motion correction
-        motionDSr[DSframe] = np.clip(motionDSr[DSframe], -maxshift, maxshift)
-        motionDSc[DSframe] = np.clip(motionDSc[DSframe], -maxshift, maxshift)
-        
-        norm_motion = np.sqrt((motionDSr[DSframe] / sz[0])**2 + (motionDSc[DSframe] / sz[1])**2)
-        y = np.arange(sz[0])
-        x = np.arange(sz[1])
-        if norm_motion > 0.75**2:  # Adjusted threshold
+        if np.sqrt((motionDSr[DSframe]/sz[0])**2 + (motionDSc[DSframe]/sz[1])**2) > 0.75**2:
             x = np.arange(sz[1])
             y = np.arange(sz[0])
             mesh_x, mesh_y = np.meshgrid(x, y)
@@ -556,23 +612,10 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             map_y = np.float32(viewR)
             Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
             
-            # Validate interpolation output
-            nan_ratio = np.isnan(Mfull).sum() / Mfull.size
-            if nan_ratio > 0.1:
-                # print(f"High NaN ratio in Mfull: {nan_ratio}. Skipping motion update for frame {DSframe}.")
-                motionDSr[DSframe] = initR
-                motionDSc[DSframe] = initC
-                continue
-            
             motion, R = fast_xcorr2_nans(Mfull.astype(np.float32), Ttmp.astype(np.float32), np.array([initR, initC]), 50)
-            
             motionDSr[DSframe] = motion[0]
             motionDSc[DSframe] = motion[1]
             aErrorDS[DSframe] = R
-        
-        # # Ensure motion stays within limits
-        # motionDSr[DSframe] = np.clip(motionDSr[DSframe], -maxshift, maxshift)
-        # motionDSc[DSframe] = np.clip(motionDSc[DSframe], -maxshift, maxshift)
         
         if abs(motionDSr[DSframe]) < maxshift and abs(motionDSc[DSframe]) < maxshift:
             X, Y = np.meshgrid(np.arange(0, sz[1]), np.arange(0, sz[0]))
@@ -585,80 +628,60 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             Asmooth = cv2.GaussianBlur(A, (0, 0), sigmaX=1)
             
             selCorr = ~np.isnan(Asmooth) & ~np.isnan(Ttmp)
-            if np.any(selCorr):
-                # Suppress ConstantInputWarning temporarily
-                with warnings.catch_warnings():
-                    warnings.simplefilter("ignore", category=RuntimeWarning)
-                    if np.std(Asmooth[selCorr]) > 0 and np.std(Ttmp[selCorr]) > 0 and len(Asmooth[selCorr]) > 1:
-                        aRankCorr[DSframe], _ = spearmanr(Asmooth[selCorr], Ttmp[selCorr])
-                    else:
-                        aRankCorr[DSframe] = np.nan  # or assign a default value like 0
-                # Compute recNegErr safely
-                try:
-                    recNegErr[DSframe] = np.mean(
-                        np.minimum(
-                            0,
-                            (Asmooth[selCorr] * np.mean(Ttmp[selCorr]) / np.mean(Asmooth[selCorr])) - Ttmp[selCorr]
-                        )**2
-                    )
-                except ZeroDivisionError:
-                    recNegErr[DSframe] = np.nan  # or another default/error value
+            if np.sum(selCorr) > 0:
+                aRankCorr[DSframe] = np.corrcoef(Asmooth[selCorr].flatten(), Ttmp[selCorr].flatten())[0, 1]
+                recNegErr[DSframe] = np.mean(
+                    np.minimum(0, Asmooth[selCorr] * np.mean(Ttmp[selCorr]) / np.mean(Asmooth[selCorr]) - Ttmp[selCorr]
+                )**2)
             
-            # Update the template safely
-            template = np.nansum(np.stack([template * templateCt, A], axis=2), axis=2)
-            templateCt += ~np.isnan(A)
+            # Sum along the third dimension, ignoring NaNs
+            templateFull = np.nansum(np.stack((templateFull * templateCt, A), axis=2), axis=2)
+
+            # Update the count where A is not NaN
+            templateCt = templateCt + ~np.isnan(A)
+
+            # Compute the average
+            templateFull = templateFull / templateCt
+
+            # Assign to template
+            template = templateFull.copy()
+
+            # Set values to NaN where the count is less than 100
+            template[templateCt < 100] = np.nan
             
-            # Avoid division by zero or NaN by replacing invalid entries
-            valid_mask = templateCt >= 100  # As per the original condition
-            template[valid_mask] /= templateCt[valid_mask]
-            template[~valid_mask] = np.nan  # Assign NaN where the count is insufficient
-            
-            # Monitor and reset template if necessary
-            # template_nan_ratio = np.isnan(template).sum() / template.size
-            # if template_nan_ratio > 0.2:
-            #     # print(f"High NaN ratio in template: {template_nan_ratio}. Resetting template.")
-            #     template = np.zeros_like(template)
-            #     templateCt = np.zeros_like(templateCt)
-            
-            initR = int(round(motionDSr[DSframe]))
-            initC = int(round(motionDSc[DSframe]))
+            initR = matlab_round(motionDSr[DSframe]) 
+            initC = matlab_round(motionDSc[DSframe])
         else:
             motionDSr[DSframe] = initR
             motionDSc[DSframe] = initC
 
-        end_total = time.time()  # End timing for the entire loop
-        # print(f"Total time for DSframe {DSframe}: {end_total - start_total:.4f} seconds\n")
-    
-    # Assuming motionDSr is already defined as a numpy array or a list
-    plt.figure(figsize=(70, 12))
-    plt.plot(motionDSr)
-    plt.xlabel('Frame')
-    plt.ylabel('Motion DSr')
-    plt.title('Motion DSr over Frames')
-    plt.savefig('motionDSr_plot.png', dpi=500)
+    # **1. Time Vector Calculation (tDS)**
+    tDS = (np.arange(1, nDSframes + 1) * dsFac) - (2**(ds_time - 1)) + 0.5
 
-    # Upsample the shifts and compute a tighter field of view
-    tDS = np.multiply(np.arange(1, nDSframes+1), dsFac) - 2**(ds_time-1) + 0.5
+    # **2. Upsampling Points**
+    upsample_factor = 2 ** ds_time
+    desired_length = upsample_factor * nDSframes
 
-    # interp_func = interp1d(tDS, motionDSc, kind='linear', fill_value='extrapolate', copy = False)
-    # motionC = interp_func(np.arange(0, 2**ds_time * nDSframes))
-    # interp_func = interp1d(tDS, motionDSr, kind='linear', fill_value='extrapolate', copy = False)
-    # motionR = interp_func(np.arange(0, 2**ds_time * nDSframes))
+    # Use linspace to include the endpoint
+    upsample_points = np.linspace(1, desired_length, num=desired_length)
 
-    # interp_func = interp1d(tDS, aErrorDS, kind='nearest', fill_value='extrapolate', copy = False)
-    # aError = interp_func(np.arange(0, 2**ds_time * nDSframes))
-    # Create the new time points
-    new_time_points = np.arange(0, (2**ds_time) * nDSframes)
+    # **3. Interpolation for motionC**
+    motionC_interp = PchipInterpolator(tDS, motionDSc, extrapolate=True)
+    motionC = motionC_interp(upsample_points)
 
-    # Pchip Interpolator for motionC and motionR with extrapolation
-    pchip_interpolator_c = PchipInterpolator(tDS, motionDSc, extrapolate=True)
-    pchip_interpolator_r = PchipInterpolator(tDS, motionDSr, extrapolate=True)
-    motionC = pchip_interpolator_c(new_time_points)
-    motionR = pchip_interpolator_r(new_time_points)
+    # **4. Interpolation for motionR**
+    motionR_interp = PchipInterpolator(tDS, motionDSr, extrapolate=True)
+    motionR = motionR_interp(upsample_points)
 
-    # Nearest neighbor interpolation for aError with extrapolation
-    nearest_interpolator = interp1d(tDS, aErrorDS, kind='nearest', fill_value='extrapolate')
-    aError = nearest_interpolator(new_time_points)
+    # **5. Nearest Interpolation for aError**
+    aError_interp = interp1d(
+        tDS,
+        aErrorDS,
+        kind='nearest',
+        fill_value='extrapolate'
+    )
+
+    aError = aError_interp(upsample_points)
 
     maxshiftC = np.max(np.abs(motionC))
     maxshiftR = np.max(np.abs(motionR))
@@ -774,8 +797,8 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Save alignment data
     aData['numChannels'] = 1
     aData['frametime'] =  0.0023 #params['frametime'] #TODO: A flag to switch between sim and actual data and avoiding hard coding. 
-    aData['motionR'] = motionR - motionR_mean
-    aData['motionC'] = motionC - motionC_mean
+    aData['motionR'] = motionR #- motionR_mean
+    aData['motionC'] = motionC #- motionC_mean
     aData['aError'] = aError
     aData['aRankCorr'] = aRankCorr
     aData['motionDSc'] = motionDSc
