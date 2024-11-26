@@ -238,8 +238,16 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         #     m - (m // 2) : m + (m // 2),
         #     n - (n // 2) : n + (n // 2),
         # ] = np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
-        CC[m//2:m//2 + m, n//2:n//2 + n] = np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
-        # Compute crosscorrelation and locate the peak
+        # Adjust slicing indices to match (41, 125)
+        row_start = m - (m // 2)
+        row_end = row_start + buf1ft.shape[0]  # Ensure it matches rows of buf1ft
+        col_start = n - (n // 2)
+        col_end = col_start + buf1ft.shape[1]  # Ensure it matches columns of buf2ft
+
+        # Perform fftshift and element-wise multiplication with conjugate
+        CC[row_start:row_end, col_start:col_end] = (
+            np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
+        )# Compute crosscorrelation and locate the peak
         CC = np.fft.ifft2(np.fft.ifftshift(CC))  # Calculate cross-correlation
 
         keep = np.ones(CC.shape, dtype=bool)
@@ -247,8 +255,8 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         keep[:, 2 * clip[1] + 1 : -2 * clip[1]] = False
         CC[~keep] = 0
 
-        max1 = np.max(np.real(CC), axis=1)
-        loc1 = np.argmax(np.real(CC), axis=1)
+        max1 = np.max(np.real(CC), axis=0)
+        loc1 = np.argmax(np.real(CC), axis=0)
         max2 = np.max(max1)
         loc2 = np.argmax(max1)
         max_val = np.max(np.real(CC))
@@ -274,8 +282,8 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         # If upsampling > 2, then refine estimate with matrix multiply DFT
         if usfac > 2:
             # Initial shift estimate in upsampled grid
-            row_shift = round(row_shift * usfac) / usfac
-            col_shift = round(col_shift * usfac) / usfac
+            row_shift = matlab_round(row_shift * usfac) / usfac
+            col_shift = matlab_round(col_shift * usfac) / usfac
             dftshift = np.fix(np.ceil(usfac * 1.5) / 2)  # Center of output array at dftshift+1
             # Matrix multiply DFT around the current shift estimate
             CC = np.conj(
