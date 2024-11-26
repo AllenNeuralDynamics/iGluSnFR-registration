@@ -585,7 +585,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     )
 
     for DSframe in range(nDSframes):
-        # if DSframe == 106:
+        # if DSframe == 177:
         #     break
         
         read_start = DSframe * dsFac
@@ -606,6 +606,8 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         
         output,_ = dftregistration_clipped(fft2(M.astype(np.float32)), fft2(T.astype(np.float32)), 4, clipShift)
         
+        outputArray.append(output) # TODO: Remove this after debug
+        
         motionDSr[DSframe] = initR + output[2]
         motionDSc[DSframe] = initC + output[3]
         aErrorDS[DSframe] = output[0]
@@ -621,6 +623,9 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
             
             motion, R = fast_xcorr2_nans(Mfull.astype(np.float32), Ttmp.astype(np.float32), np.array([initR, initC]), 50)
+            
+            xcorreArray.append(motion) # TODO: Remove this after debug
+            
             motionDSr[DSframe] = motion[0]
             motionDSc[DSframe] = motion[1]
             aErrorDS[DSframe] = R
@@ -649,7 +654,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             templateCt = templateCt + ~np.isnan(A)
 
             # Compute the average
-            templateFull = templateFull / templateCt
+            templateFull = templateFull / (templateCt + np.finfo(float).eps)
 
             # Assign to template
             template = templateFull.copy()
@@ -659,6 +664,8 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             
             initR = matlab_round(motionDSr[DSframe]) 
             initC = matlab_round(motionDSc[DSframe])
+
+            intArray.append([initR, initC])
         else:
             motionDSr[DSframe] = initR
             motionDSc[DSframe] = initC
