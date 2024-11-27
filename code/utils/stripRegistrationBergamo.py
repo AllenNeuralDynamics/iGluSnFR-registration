@@ -606,7 +606,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         
         output,_ = dftregistration_clipped(fft2(M.astype(np.float32)), fft2(T.astype(np.float32)), 4, clipShift)
         
-        outputArray.append(output) # TODO: Remove this after debug
+        # outputArray.append(output) # TODO: Remove this after debug
         
         motionDSr[DSframe] = initR + output[2]
         motionDSc[DSframe] = initC + output[3]
@@ -624,7 +624,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             
             motion, R = fast_xcorr2_nans(Mfull.astype(np.float32), Ttmp.astype(np.float32), np.array([initR, initC]), 50)
             
-            xcorreArray.append(motion) # TODO: Remove this after debug
+            # xcorreArray.append(motion) # TODO: Remove this after debug
             
             motionDSr[DSframe] = motion[0]
             motionDSc[DSframe] = motion[1]
@@ -665,7 +665,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             initR = matlab_round(motionDSr[DSframe]) 
             initC = matlab_round(motionDSc[DSframe])
 
-            intArray.append([initR, initC])
+            # intArray.append([initR, initC])
         else:
             motionDSr[DSframe] = initR
             motionDSc[DSframe] = initC
