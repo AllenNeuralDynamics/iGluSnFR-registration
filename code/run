@@ -26,5 +26,8 @@ pwd
 input=$1
 output=$2
 
+echo "input=$1"
+echo "output=$2"
+
 # Run the Python script with the passed arguments
 python -u run_capsule.py --input "$input" --output "$output"
