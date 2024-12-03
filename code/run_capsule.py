@@ -34,9 +34,6 @@ warnings.filterwarnings("ignore")
 @retry(stop=stop_after_attempt(4), wait=wait_fixed(3))
 def read_tiff_file(fn):
     print('Reading:', fn)
-    # A = ScanImageTiffReader(fn)
-    # Ad = np.array(A.data(), dtype=np.float32)
-    # return Ad
     with tifffile.TiffFile(fn) as tif:
         imageData = tif.asarray()
         Ad = np.array(imageData, dtype=np.float32)
