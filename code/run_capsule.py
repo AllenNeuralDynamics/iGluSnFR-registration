@@ -96,8 +96,14 @@ def run(params, data_dir, output_path, caiman_template):
         os.makedirs(output_path)
         print('Output directory created at', output_path)
     
-    folder_number =  os.path.basename(os.path.dirname(data_dir))
-    process_file(data_dir, folder_number, params, output_path, caiman_template)
+    # Iterate over all files in the directory
+    for filename in os.listdir(data_dir):
+        # Construct full file path
+        file_path = os.path.join(data_dir, filename)
+        # Check if the file is a .tif file
+        if os.path.isfile(file_path) and filename.endswith('.tif'):
+            folder_number =  os.path.basename(data_dir)
+            process_file(file_path, folder_number, params, output_path, caiman_template)
 
 if __name__ == "__main__": 
     # Create argument parser
