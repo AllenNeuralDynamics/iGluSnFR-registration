@@ -647,8 +647,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             x = np.arange(sz[1])
             y = np.arange(sz[0])
             mesh_x, mesh_y = np.meshgrid(x, y)
-            
-            start_cv2_remap = time.time()
+
             map_x = np.float32(viewC)
             map_y = np.float32(viewR)
             Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
@@ -757,7 +756,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     Bcount = np.zeros((viewR.shape[0], viewR.shape[1], numChannels), dtype=np.float32)
     Bsum = np.zeros((viewR.shape[0], viewR.shape[1], numChannels), dtype=np.float64)
 
-    tiffSave_time_start = time.time()
     for DSframe in range(nDSframes):
         readFrames = (DSframe * dsFac) + np.arange(dsFac)
         YY = downsampleTime(Ad[:, :, :, readFrames], ds_time)
@@ -776,9 +774,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             B[np.isnan(B)] = 0
             Bsum[:, :, ch] += B.astype(np.float64)
 
-    tiffSave_time_end = time.time()
-    print(f"Total time for tiffSave_raw: {tiffSave_time_end - tiffSave_time_start:.4f} seconds\n")
-    
     # Calculate nanRows and nanCols correctly
     nanRows = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=1) == 1
     nanCols = np.mean(np.mean(np.isnan(tiffSave), axis=2), axis=0) == 1
@@ -816,23 +811,14 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         tifffile.imwrite(channel_mean_path, Bmean)  
 
     raw_tif_path = f"{base_name}_REGISTERED_RAW{ext}"
-    tiffSave_raw_time_start = time.time()  
     tiffSave_raw = process_raw_frames_cpu(Ad, viewR, viewC, numChannels, nanRows, nanCols, motionC, motionR)
-    tiffSave_raw_time_end = time.time()
-    print(f"Total time for tiffSave_raw: {tiffSave_raw_time_end - tiffSave_raw_time_start:.4f} seconds\n")
     del Ad
     
     # Transpose to match ImageJ convention (time, Y, X)
-    tiffSave_raw_time_transpose_start = time.time()
     tiffSave_raw = tiffSave_raw.transpose((2, 1, 0))
-    tiffSave_raw_time_transpose_end = time.time()
-    print(f"Total time for tiffSave_raw transpose: {tiffSave_raw_time_transpose_end - tiffSave_raw_time_transpose_start:.4f} seconds\n")
     
     # Save with correct metadata
-    tiffSave_raw_time_tiffwrite_start = time.time()
     tifffile.imwrite(raw_tif_path, tiffSave_raw, bigtiff=True, imagej=True, metadata={'axes': 'ZYX'}, maxworkers=os.cpu_count())
-    tiffSave_raw_time_tiffwrite_end = time.time()
-    print(f"Total time for tiffSave_raw transpose: {tiffSave_raw_time_tiffwrite_end - tiffSave_raw_time_tiffwrite_start:.4f} seconds\n")
 
     # Remove from tiffSave memory
     del tiffSave_raw
@@ -843,8 +829,8 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Save alignment data
     aData['numChannels'] = 1
     aData['frametime'] =  0.0023 #params['frametime'] #TODO: A flag to switch between sim and actual data and avoiding hard coding. 
-    aData['motionR'] = motionR #- motionR_mean
-    aData['motionC'] = motionC #- motionC_mean
+    aData['motionR'] = motionR 
+    aData['motionC'] = motionC 
     aData['aError'] = aError
     aData['aRankCorr'] = aRankCorr
     aData['motionDSc'] = motionDSc
@@ -865,5 +851,4 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         f.create_dataset("aData/motionDSr", data=aData['motionDSr'], compression="gzip")
         f.create_dataset("aData/recNegErr", data=aData['recNegErr'], compression="gzip")
 
-    # Center the shifts to zero 
-    return aData['motionR'], aData['motionC'], path_template_list
+    return path_template_list

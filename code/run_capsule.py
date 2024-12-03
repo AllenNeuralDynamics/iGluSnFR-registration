@@ -48,7 +48,7 @@ def read_tiff_file(fn):
         numChannels = Ad.shape[1]
     return Ad, numChannels  
 
-def process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse, caiman_template):
+def process_file(fn, folder_number, params, output_path, caiman_template):
     try:
         Ad, params['numChannels'] = read_tiff_file(fn)
         # Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
@@ -66,73 +66,11 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
     name, ext = os.path.splitext(os.path.basename(fn))
     os.makedirs(os.path.join(output_path, folder_number), exist_ok=True)
 
-    # 1. Strip Bergamo Registration
+    # Strip Bergamo Registration
     strip_fn = f"{name}{ext}"
     output_path_ = os.path.join(output_path, os.path.join(folder_number, strip_fn))
     path_template_list = []
-    x_shifts_strip, y_shifts_strip, path_template_list = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_, caiman_template)
-
-    if use_suite2p:
-        # 2. Suite2p Registration
-        suite2p_fn = f"{name}_suite2p{ext}"
-        output_path_suite2 = os.path.join(output_path, os.path.join(folder_number, suite2p_fn))
-        n_time, Ly, Lx = Ad.shape[3], Ad.shape[0], Ad.shape[1]
-        x_shifts_suite2p, y_shifts_suite2p = suite2pRegistration(data_dir, fn, n_time, Ly, Lx, output_path, folder_number, output_path_suite2)
-    else:
-        print('-------Skipping Suite2p------')
-        x_shifts_suite2p, y_shifts_suite2p = 0 , 0
-
-    if use_caiman:
-        # 3. CaImAn Registration
-        caiman_fn = f"{name}_caiman{ext}"
-        output_path_caiman = os.path.join(output_path, os.path.join(folder_number, caiman_fn))
-        x_shifts_caiman, y_shifts_caiman = CaImAnRegistration(fn, output_path_caiman)
-    else:
-        print('-------Skipping Suite2p------')
-        x_shifts_caiman, y_shifts_caiman = 0 , 0
-
-    # Check if compute_mse is not None before proceeding
-    if compute_mse:
-        # Read ground truth
-        h5_fn = fn.replace('.tif', '_groundtruth.h5')
-        h5_path = h5_fn
-        with h5py.File(h5_path, 'r') as file:
-            gt_motionC = file['GT/motionC'][:]
-            mean_gt_motionC = np.mean(gt_motionC)
-            gt_motionC -= mean_gt_motionC
-
-            gt_motionR = file['GT/motionR'][:]
-            mean_gt_motionR = np.mean(gt_motionR)
-            gt_motionR -= mean_gt_motionR
-
-        # Calculate MSE for x shifts
-        mse_x_strip = np.mean((x_shifts_strip - gt_motionR)**2)
-        mse_x_suite2p = np.mean((x_shifts_suite2p - gt_motionR)**2)
-        mse_x_caiman = np.mean((x_shifts_caiman - gt_motionR)**2)
-
-        # Calculate MSE for y shifts
-        mse_y_strip = np.mean((y_shifts_strip - gt_motionC)**2)
-        mse_y_suite2p = np.mean((y_shifts_suite2p - gt_motionC)**2)
-        mse_y_caiman = np.mean((y_shifts_caiman - gt_motionC)**2)
-
-        print("MSE of x_shifts_strip:", mse_x_strip)
-        print("MSE of x_shifts_suite2p:", mse_x_suite2p)
-        print("MSE of x_shifts_caiman:", mse_x_caiman)
-        
-        print("MSE of y_shifts_strip:", mse_y_strip)
-        print("MSE of y_shifts_suite2p:", mse_y_suite2p)
-        print("MSE of y_shifts_caiman:", mse_y_caiman)
-
-        # Write the MSE values to the CSV file
-        writer.writerow({
-            'file_name': os.path.basename(fn),
-            'suite2p_R': mse_x_suite2p,
-            'Caiman_R': mse_x_caiman,
-            'strip_R': mse_x_strip,
-            'suite2p_C': mse_y_suite2p,
-            'Caiman_C': mse_y_caiman,
-            'strip_C': mse_y_strip
-        })
+    path_template_list = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_, caiman_template)
 
     # Clean up temporary files
     if not caiman_template:
@@ -155,48 +93,14 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
 
     return True
     
-def run(params, data_dir, output_path, use_suite2p, use_caiman, compute_mse, caiman_template):
-    print('data_dir--->', data_dir)
+def run(params, data_dir, output_path, caiman_template):
     if not os.path.exists(output_path):
         print('Creating main output directory...')
         os.makedirs(output_path)
         print('Output directory created at', output_path)
-
-    registration_results_file = os.path.join(output_path, 'registration_results.csv')
-    file_exists = os.path.isfile(registration_results_file)
-
-    tif_files = []
-    for root, dirs, files in os.walk(data_dir):
-        for file in files:
-            if file.endswith('.tif'):
-                file_path = os.path.join(root, file)
-                folder_number = os.path.basename(os.path.dirname(file_path))
-                tif_files.append((file_path, folder_number))
-
-    print('tif_files--->', tif_files)
-    tif_files_sorted = sorted(tif_files, key=lambda x: int(x[1]))
-
-    logging.basicConfig(level=logging.INFO)
-
-    failed_files = []
     
-    with open(registration_results_file, 'a', newline='') as csvfile:
-        fieldnames = ['file_name', 'suite2p_R', 'Caiman_R', 'strip_R', 'suite2p_C', 'Caiman_C', 'strip_C']
-        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-
-        for i, (fn, folder_number) in enumerate(tif_files_sorted, start=1):
-            print(f'Files left: {len(tif_files) - i}')
-            if not process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse, caiman_template):
-                failed_files.append((fn, folder_number))
-
-    # Retry processing failed files
-    if failed_files:
-        print("Retrying failed files...")
-        for fn, folder_number in failed_files:
-            print(f'Retrying file: {fn}')
-            process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse, caiman_template)
+    folder_number =  os.path.basename(os.path.dirname(data_dir))
+    process_file(data_dir, folder_number, params, output_path, caiman_template)
 
 if __name__ == "__main__": 
     # Create argument parser
@@ -213,9 +117,6 @@ if __name__ == "__main__":
     parser.add_argument('--numChannels', type=int, default=1)
     parser.add_argument('--writetiff', type=bool, default=False)
     parser.add_argument('--ds_time', type=int, default=3)
-    parser.add_argument('--suite2p', type=bool, default=False)
-    parser.add_argument('--caiman', type=bool, default=False)
-    parser.add_argument('--compute_mse', type=bool, default=False)
     parser.add_argument('--caiman_template', type=bool, default=True, help='By default it uses Caiman to generate initial template, else it would use JNormCorre')
 
     # Parse the arguments
@@ -234,4 +135,4 @@ if __name__ == "__main__":
     params['writetiff'] = args.writetiff
     params['ds_time'] = args.ds_time
 
-    run(params, data_dir, output_path, args.suite2p, args.caiman, args.compute_mse, args.caiman_template)
+    run(params, data_dir, output_path, args.caiman_template)
