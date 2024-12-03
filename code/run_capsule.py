@@ -48,7 +48,7 @@ def read_tiff_file(fn):
         numChannels = Ad.shape[1]
     return Ad, numChannels  
 
-def process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse):
+def process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse, caiman_template):
     try:
         Ad, params['numChannels'] = read_tiff_file(fn)
         # Ad = np.reshape(Ad, (Ad.shape[0], Ad.shape[1], params['numChannels'], -1))
@@ -70,7 +70,7 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
     strip_fn = f"{name}{ext}"
     output_path_ = os.path.join(output_path, os.path.join(folder_number, strip_fn))
     path_template_list = []
-    x_shifts_strip, y_shifts_strip, path_template_list = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_)
+    x_shifts_strip, y_shifts_strip, path_template_list = stripRegistrationBergamo_init(params['ds_time'], initFrames, Ad, params['maxshift'], params['clipShift'], params['alpha'], params['numChannels'], path_template_list, output_path_, caiman_template)
 
     if use_suite2p:
         # 2. Suite2p Registration
@@ -135,12 +135,13 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
         })
 
     # Clean up temporary files
-    for file_path in path_template_list:
-        if os.path.exists(file_path):
-            print("Deleting jnormcorre tif files.")
-            os.remove(file_path)
-        else:
-            print(f"The file {file_path} does not exist.")
+    if not caiman_template:
+        for file_path in path_template_list:
+            if os.path.exists(file_path):
+                print("Deleting jnormcorre tif files.")
+                os.remove(file_path)
+            else:
+                print(f"The file {file_path} does not exist.")
 
     # Remove tiffs generated from CaImAn
     caiman_dir_path = '/root/capsule/'
@@ -154,7 +155,7 @@ def process_file(fn, folder_number, params, output_path, writer, use_suite2p, us
 
     return True
     
-def run(params, data_dir, output_path, use_suite2p, use_caiman, compute_mse):
+def run(params, data_dir, output_path, use_suite2p, use_caiman, compute_mse, caiman_template):
     print('data_dir--->', data_dir)
     if not os.path.exists(output_path):
         print('Creating main output directory...')
@@ -187,7 +188,7 @@ def run(params, data_dir, output_path, use_suite2p, use_caiman, compute_mse):
 
         for i, (fn, folder_number) in enumerate(tif_files_sorted, start=1):
             print(f'Files left: {len(tif_files) - i}')
-            if not process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse):
+            if not process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse, caiman_template):
                 failed_files.append((fn, folder_number))
 
     # Retry processing failed files
@@ -195,7 +196,7 @@ def run(params, data_dir, output_path, use_suite2p, use_caiman, compute_mse):
         print("Retrying failed files...")
         for fn, folder_number in failed_files:
             print(f'Retrying file: {fn}')
-            process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse)
+            process_file(fn, folder_number, params, output_path, writer, use_suite2p, use_caiman, compute_mse, caiman_template)
 
 if __name__ == "__main__": 
     # Create argument parser
@@ -215,6 +216,7 @@ if __name__ == "__main__":
     parser.add_argument('--suite2p', type=bool, default=False)
     parser.add_argument('--caiman', type=bool, default=False)
     parser.add_argument('--compute_mse', type=bool, default=False)
+    parser.add_argument('--caiman_template', type=bool, default=True, help='By default it uses Caiman to generate initial template, else it would use JNormCorre')
 
     # Parse the arguments
     args = parser.parse_args()
@@ -232,4 +234,4 @@ if __name__ == "__main__":
     params['writetiff'] = args.writetiff
     params['ds_time'] = args.ds_time
 
-    run(params, data_dir, output_path, args.suite2p, args.caiman, args.compute_mse)
+    run(params, data_dir, output_path, args.suite2p, args.caiman, args.compute_mse, args.caiman_template)
