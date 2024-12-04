@@ -574,7 +574,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         F = np.transpose(F, (1, 2, 0))
 
     F = np.mean(F, axis=2)
-    # F = loadmat('/root/capsule/scratch/michael_template_F.mat')['F'] #TODO: Remove this
 
     # Create a template with NaNs
     template = np.full((2*maxshift + sz[0], 2*maxshift + sz[1]), np.nan)
@@ -596,7 +595,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     initC = 0
 
     # Calculate the number of downsampled frames
-    nDSframes = np.floor(sz[3] / dsFac).astype(int)  # Using sz[3] as it corresponds to MATLAB's sz(4)
+    nDSframes = np.floor(sz[3] / dsFac).astype(int) 
 
     print('Strip Registeration...')
     aData = {} # Alignment data dictionary
@@ -616,8 +615,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     )
 
     for DSframe in range(nDSframes):
-        # if DSframe == 177:
-        #     break
         
         read_start = DSframe * dsFac
         read_end = read_start + dsFac
@@ -636,9 +633,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
         ]
         
         output,_ = dftregistration_clipped(fft2(M.astype(np.float32)), fft2(T.astype(np.float32)), 4, clipShift)
-        
-        # outputArray.append(output) # TODO: Remove this after debug
-        
+                
         motionDSr[DSframe] = initR + output[2]
         motionDSc[DSframe] = initC + output[3]
         aErrorDS[DSframe] = output[0]
@@ -653,9 +648,7 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
             Mfull = cv2.remap(M.astype(np.float32), map_x, map_y, interpolation=cv2.INTER_LINEAR, borderMode=cv2.BORDER_CONSTANT, borderValue=np.nan)
             
             motion, R = fast_xcorr2_nans(Mfull.astype(np.float32), Ttmp.astype(np.float32), np.array([initR, initC]), 50)
-            
-            # xcorreArray.append(motion) # TODO: Remove this after debug
-            
+                        
             motionDSr[DSframe] = motion[0]
             motionDSc[DSframe] = motion[1]
             aErrorDS[DSframe] = R

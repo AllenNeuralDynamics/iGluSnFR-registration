@@ -17,13 +17,6 @@ import tifffile
 from scipy.interpolate import interp1d
 from scipy.interpolate import interp1d, PchipInterpolator
 from utils.stripRegistrationBergamo import stripRegistrationBergamo_init
-from utils.suite2pRegistration import suite2pRegistration
-from utils.CaImAnRegistration import CaImAnRegistration
-# from aind_data_schema.core.data_description import Funding, RawDataDescription
-# from aind_data_schema_models.modalities import Modality
-# from aind_data_schema_models.organizations import Organization
-# from aind_data_schema_models.pid_names import PIDName
-# from aind_data_schema_models.platforms import Platform
 import logging
 from tenacity import retry, stop_after_attempt, wait_fixed
 import warnings
@@ -37,7 +30,6 @@ def read_tiff_file(fn):
     with tifffile.TiffFile(fn) as tif:
         imageData = tif.asarray()
         Ad = np.array(imageData, dtype=np.float32)
-        print('Shape while reading tiff---->', Ad.shape)
 
         if len(Ad.shape) == 3:
             Ad = np.reshape(Ad, (Ad.shape[0], 1, Ad.shape[1],  Ad.shape[2])) # Add channel info
