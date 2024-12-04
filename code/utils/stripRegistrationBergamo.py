@@ -218,14 +218,14 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         md2 = m // 2
         nd2 = n // 2
         if rloc > md2:
-            row_shift = rloc - m - 1  # Add the -1
+            row_shift = rloc - m - 1  
         else:
-            row_shift = rloc - 1      # Add the -1
+            row_shift = rloc - 1      
 
         if cloc > nd2:
-            col_shift = cloc - n - 1  # Add the -1
+            col_shift = cloc - n - 1  
         else:
-            col_shift = cloc - 1      # Add the -1
+            col_shift = cloc - 1     
 
         output = [error, diffphase, row_shift, col_shift]
         return output, None
@@ -236,11 +236,6 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
         mlarge = m * 2
         nlarge = n * 2
         CC = np.zeros((mlarge, nlarge), dtype=np.complex128)
-        # CC[
-        #     m - (m // 2) : m + (m // 2),
-        #     n - (n // 2) : n + (n // 2),
-        # ] = np.fft.fftshift(buf1ft) * np.conj(np.fft.fftshift(buf2ft))
-        # Adjust slicing indices to match (41, 125)
         row_start = m - (m // 2)
         row_end = row_start + buf1ft.shape[0]  # Ensure it matches rows of buf1ft
         col_start = n - (n // 2)
@@ -299,8 +294,8 @@ def dftregistration_clipped(buf1ft, buf2ft, usfac=1, clip=None):
                 )
             ) / (md2 * nd2 * usfac ** 2)
             # Locate maximum and map back to original pixel grid
-            max1 = np.max(np.real(CC), axis=0) #<--------- was set to axis 0
-            loc1 = np.argmax(np.real(CC), axis=0) #<--------- was set to axis 0
+            max1 = np.max(np.real(CC), axis=0) 
+            loc1 = np.argmax(np.real(CC), axis=0) 
             max2 = np.max(max1)
             loc2 = np.argmax(max1)
             rloc = loc1[loc2]
@@ -582,8 +577,6 @@ def stripRegistrationBergamo_init(ds_time, initFrames, Ad, maxshift, clipShift, 
     # Insert the matrix F into the template
     template[maxshift:maxshift+sz[0], maxshift:maxshift+sz[1]] = F
 
-    # template = np.transpose(template)
-    print('template Shape----->', template.shape)
     # Copy the template to T0
     T0 = template.copy()
 
