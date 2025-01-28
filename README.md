@@ -1,6 +1,6 @@
 # iGluSnFR-registration
 
-This capsule does registration for iGluSnFR data.
+This capsule implements a robust motion correction pipeline for iGluSnFR imaging data, with support for either CaImAn or JNormCorre for initial template generation. The pipeline includes time-series downsampling, correlation-based template frame selection, strip-wise registration, and parallel processing for efficient computation, producing motion-corrected movies along with detailed alignment metrics and channel-specific average images.
 
 # Usage:
 ```
