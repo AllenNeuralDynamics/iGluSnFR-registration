@@ -25,20 +25,23 @@ warnings.filterwarnings("ignore")
 
 
 # Define the retry decorator
-@retry(stop=stop_after_attempt(4), wait=wait_fixed(3))
+# @retry(stop=stop_after_attempt(4), wait=wait_fixed(3))
 def read_tiff_file(fn):
     print("Reading:", fn)
-    with tifffile.TiffFile(fn) as tif:
-        imageData = tif.asarray()
-        Ad = np.array(imageData, dtype=np.float32)
-
+    try:
+        # Attempt to read the TIFF file
+        Ad = tifffile.imread(fn)
+        
         if len(Ad.shape) == 3:
             Ad = np.reshape(
                 Ad, (Ad.shape[0], 1, Ad.shape[1], Ad.shape[2])
             )  # Add channel info
-
+        print('Ad shape:', Ad.shape)
         numChannels = Ad.shape[1]
-    return Ad, numChannels
+        return Ad, numChannels
+    except Exception as e:
+        print(f"Failed to read {fn}: {e}")
+        return None
 
 
 def process_file(fn, folder_number, params, output_path, caiman_template):

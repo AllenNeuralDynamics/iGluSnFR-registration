@@ -1,26 +1,16 @@
 #!/usr/bin/env bash
 ls
 set -ex
-# # Navigate to the directory containing setup.py
+# Navigate to the directory containing setup.py
 # cd /root/capsule/code/utils
 
-# # Build Cython extensions in place
+# Build Cython extensions in place
 # python setup.py build_ext --inplace
 
-# export JAX_TRACEBACK_FILTERING=off
-
-# python -u run_capsule.py --input ../data/iGluSnFR-testing-Sim-Data-ReleaseSites_1/ --output ../scratch/testing/ #../results/
-
 pwd
-
-# python -u run_capsule.py --input ../data/iGluSnFR-Michael-testing --output ../results/
-
-# python -u run_capsule.py --input ../data/iGluSnFR_simulations --output ../results/
-
-# python -u run_capsule.py --input ../data/scan_00010_20240815_140228_adrian --output ../results/
-
-# python -u run_capsule.py --input ../data/iGluSnFR-Michael-testing --output ../scratch/testing/
-
+ 
+# python -u run_capsule.py --input ../data/iGluSnFR4f_dendrite_passiveDriftingGratings/743712_02 --output ../scratch/testing/
+# python -u run_capsule.py --input ../data/iGluSnFR_simulations_z_default/1 --output ../scratch/testing/
 
 # Capture input and output from command-line arguments
 input=$1

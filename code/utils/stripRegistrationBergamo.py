@@ -662,11 +662,7 @@ def stripRegistrationBergamo_init(
         else:
             print(f"The template {path_template} does not exist.")
 
-        template = ScanImageTiffReader(
-            path_template
-        )  # TODO: Replace with tifffilereader
-
-        F = template.data()
+        F = imread(path_template)
         F = np.transpose(F, (1, 2, 0))
 
     F = np.mean(F, axis=2)
@@ -775,7 +771,7 @@ def stripRegistrationBergamo_init(
             Yq = viewR + motionDSr[DSframe]
 
             A = cv2.remap(
-                M,
+                M.astype(np.float32), # CJS: It will break without float32 type-casting
                 Xq.astype(np.float32),
                 Yq.astype(np.float32),
                 cv2.INTER_LINEAR,
@@ -970,11 +966,8 @@ def stripRegistrationBergamo_init(
     # Remove from tiffSave memory
     del tiffSave_raw
 
-    motionR_mean = np.mean(motionR)
-    motionC_mean = np.mean(motionC)
-
     # Save alignment data
-    aData["numChannels"] = 1
+    aData["numChannels"] = numChannels
     aData["frametime"] = (
         0.0023  # params['frametime'] #TODO: A flag to switch between sim and actual data and avoiding hard coding.
     )
@@ -985,6 +978,7 @@ def stripRegistrationBergamo_init(
     aData["motionDSc"] = motionDSc
     aData["motionDSr"] = motionDSr
     aData["recNegErr"] = recNegErr
+    aData["alignHz"] = 1/aData["frametime"]/dsFac
 
     base_name, ext = os.path.splitext(tif_path)
     alignmentData_h5_path = f"{base_name}_ALIGNMENTDATA.h5"
