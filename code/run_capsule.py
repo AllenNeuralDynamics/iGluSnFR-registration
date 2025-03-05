@@ -133,13 +133,13 @@ if __name__ == "__main__":
     )
 
     # Add optional arguments with default values
-    parser.add_argument("--maxshift", type=int, default=50)
+    parser.add_argument("--maxshift", type=int, default=50, help='Max pixel shift for registration')
     parser.add_argument("--clipShift", type=int, default=10)
-    parser.add_argument("--alpha", type=float, default=0.0005)
-    parser.add_argument("--removeLines", type=int, default=4)
-    parser.add_argument("--numChannels", type=int, default=1)
-    parser.add_argument("--writetiff", type=bool, default=False)
-    parser.add_argument("--ds_time", type=int, default=3)
+    parser.add_argument("--alpha", type=float, default=0.0005, help='Regularization parameter')
+    parser.add_argument("--removeLines", type=int, default=4, help='Border pixels to exclude')
+    parser.add_argument("--numChannels", type=int, default=1, help='Supports multichannel registration')
+    parser.add_argument("--writetiff", type=bool, default=False, help='If False it would write movies as h5 file else write it as a tif')
+    parser.add_argument("--ds_time", type=int, default=1, help='Temporal downsampling factor (2^n)')
     parser.add_argument(
         "--caiman_template",
         type=bool,
@@ -155,6 +155,7 @@ if __name__ == "__main__":
 
     # Assign the parsed arguments to params dictionary
     params = {}
+
     params["maxshift"] = args.maxshift
     params["clipShift"] = args.clipShift
     params["alpha"] = args.alpha
@@ -164,3 +165,4 @@ if __name__ == "__main__":
     params["ds_time"] = args.ds_time
 
     run(params, data_dir, output_path, args.caiman_template)
+
