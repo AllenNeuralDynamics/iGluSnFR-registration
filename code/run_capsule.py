@@ -31,12 +31,12 @@ def read_tiff_file(fn):
     try:
         # Attempt to read the TIFF file
         Ad = tifffile.imread(fn)
-        
+
         if len(Ad.shape) == 3:
             Ad = np.reshape(
                 Ad, (Ad.shape[0], 1, Ad.shape[1], Ad.shape[2])
             )  # Add channel info
-        print('Ad shape:', Ad.shape)
+        print("Ad shape:", Ad.shape)
         numChannels = Ad.shape[1]
         return Ad, numChannels
     except Exception as e:
@@ -54,7 +54,7 @@ def process_file(fn, folder_number, params, output_path, caiman_template):
 
     # Permute the dimensions of the array to reorder them
     Ad = np.transpose(Ad, (2, 3, 1, 0))
-    Ad = np.array(Ad, dtype=np.float32) 
+    Ad = np.array(Ad, dtype=np.float32)
     Ad = Ad[params["removeLines"] :, :, :, :]
 
     # Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug

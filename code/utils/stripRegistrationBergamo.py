@@ -771,7 +771,7 @@ def stripRegistrationBergamo_init(
             Yq = viewR + motionDSr[DSframe]
 
             A = cv2.remap(
-                M.astype(np.float32), # CJS: It will break without float32 type-casting
+                M.astype(np.float32),  # CJS: It will break without float32 type-casting
                 Xq.astype(np.float32),
                 Yq.astype(np.float32),
                 cv2.INTER_LINEAR,
@@ -978,7 +978,7 @@ def stripRegistrationBergamo_init(
     aData["motionDSc"] = motionDSc
     aData["motionDSr"] = motionDSr
     aData["recNegErr"] = recNegErr
-    aData["alignHz"] = 1/aData["frametime"]/dsFac
+    aData["alignHz"] = 1 / aData["frametime"] / dsFac
 
     base_name, ext = os.path.splitext(tif_path)
     alignmentData_h5_path = f"{base_name}_ALIGNMENTDATA.h5"
