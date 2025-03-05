@@ -54,6 +54,7 @@ def process_file(fn, folder_number, params, output_path, caiman_template):
 
     # Permute the dimensions of the array to reorder them
     Ad = np.transpose(Ad, (2, 3, 1, 0))
+    Ad = np.array(Ad, dtype=np.float32) 
     Ad = Ad[params["removeLines"] :, :, :, :]
 
     # Ad = Ad[:,:,:,:9000] #TODO: Remove this after Debug

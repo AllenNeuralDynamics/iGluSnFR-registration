@@ -9,8 +9,8 @@ set -ex
 
 pwd
  
-# python -u run_capsule.py --input ../data/iGluSnFR4f_dendrite_passiveDriftingGratings/743712_02 --output ../scratch/testing/
-# python -u run_capsule.py --input ../data/iGluSnFR_simulations_z_default/1 --output ../scratch/testing/
+# python -u run_capsule.py --input ../data/iGluSnFR4f_dendrite_passiveDriftingGratings/743712_01 --output ../results/
+# python -u run_capsule.py --input ../data/iGluSnFR_simulations_z_default/1 --output  ../results/
 
 # Capture input and output from command-line arguments
 input=$1
