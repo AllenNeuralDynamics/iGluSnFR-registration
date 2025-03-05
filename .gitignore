@@ -152,3 +152,4 @@ dmypy.json
 *.tiff
 
 results/codeocean_detectenv.json
+environment/Dockerfile
