@@ -31,6 +31,13 @@ _alignment_data.h5 contains h5 file:
 - `aData/motionDSr`: The downsampled values used to motion correct across the Y axis.
 - `aData/recNegErr`: Negative reconstruction error metrics
 
+# In-vivo tifs:
+| ![Image 1](https://github.com/user-attachments/assets/56b830d2-e6a5-447d-9b98-15f98371463b) | ![Image 2](https://github.com/user-attachments/assets/8f29591d-08c0-4f1f-b17b-b859e81fe286) |
+|:--------------------------------------------------------:|:-------------------------------------------------------:|
+| Invivo movie before motion correction           | Invivo movie after motion correction                   |
+
+
+# Registeration flowchart:
 ```mermaid
 flowchart TD
     A[Input Data] --> B[Downsample Time Series]
